@@ -16,23 +16,64 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/context/AuthContext";
-import { ACTIVE_PLAN, ADHERENCE_TREND, APPOINTMENTS, SESSIONS } from "@/lib/mock-data";
+import { useSessions } from "@/context/SessionsContext";
+import { ACTIVE_PLAN, ADHERENCE_TREND, APPOINTMENTS, CURRENT_PATIENT_ID } from "@/lib/mock-data";
 import { getExercise } from "@/lib/exercises";
 import { formatDate, formatRelative } from "@/lib/utils";
 
+const DAY = 86400_000;
+const KNEE_TARGET_ROM = 135;
+
+function greeting(hour: number) {
+  if (hour < 6) return "Доброй ночи";
+  if (hour < 12) return "Доброе утро";
+  if (hour < 18) return "Добрый день";
+  return "Добрый вечер";
+}
+
+/** longest run of consecutive days with a session, ending today or yesterday */
+function computeStreak(dates: Set<string>) {
+  const cursor = new Date();
+  if (!dates.has(cursor.toDateString())) cursor.setDate(cursor.getDate() - 1);
+  let streak = 0;
+  while (dates.has(cursor.toDateString())) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
 export default function PatientDashboard() {
   const { user } = useAuth();
-  const todayTargetSets = ACTIVE_PLAN.exercises.reduce((s, e) => s + e.targetSets, 0);
-  const todaySessions = SESSIONS.filter(
-    (s) => new Date(s.date).toDateString() === new Date().toDateString()
-  );
+  const { sessionsFor } = useSessions();
+  const mySessions = sessionsFor(CURRENT_PATIENT_ID); // newest first
+
+  const firstName = user?.name?.split(" ")[0] ?? "пациент";
+  const todayKey = new Date().toDateString();
+  const todaySessions = mySessions.filter((s) => new Date(s.date).toDateString() === todayKey);
+
+  const todayTargetSets = ACTIVE_PLAN.exercises.reduce((sum, e) => sum + e.targetSets, 0);
   const doneSets = todaySessions.length;
-  const dayProgress = Math.round((doneSets / todayTargetSets) * 100);
+  const dayProgress = todayTargetSets > 0 ? Math.min(100, Math.round((doneSets / todayTargetSets) * 100)) : 0;
+
+  // metrics derived from real sessions
+  const dayKeys = new Set(mySessions.map((s) => new Date(s.date).toDateString()));
+  const streak = computeStreak(dayKeys);
+  const weekAgo = Date.now() - 7 * DAY;
+  const activeDaysThisWeek = new Set(
+    mySessions.filter((s) => new Date(s.date).getTime() >= weekAgo).map((s) => new Date(s.date).toDateString())
+  ).size;
+  const adherence = Math.min(100, Math.round((activeDaysThisWeek / 7) * 100));
+
+  const romList = mySessions.filter((s) => s.achievedROM).map((s) => s.achievedROM as number);
+  const latestROM = romList[0] ?? 0;
+  const prevROM = romList[1] ?? latestROM;
+  const romDeltaPct = prevROM > 0 ? Math.round(((latestROM - prevROM) / prevROM) * 100) : undefined;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`Добрый день, ${user?.name.split(" ")[0]}!`}
+        title={`${greeting(new Date().getHours())}, ${firstName}!`}
         description="Вот ваша программа на сегодня и общий прогресс восстановления."
         actions={
           <Button asChild>
@@ -45,10 +86,16 @@ export default function PatientDashboard() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Восстановление" value="64%" icon={TrendingUp} delta={6} hint="Цель ROM 135°" />
-        <StatCard label="Приверженность" value="86%" icon={Target} delta={4} hint="за 30 дней" />
-        <StatCard label="Серия дней" value="9" icon={Flame} hint="не пропускайте!" />
-        <StatCard label="Сессий всего" value={SESSIONS.length * 6} icon={Activity} delta={12} />
+        <StatCard
+          label="ROM колена"
+          value={latestROM ? `${latestROM}°` : "—"}
+          icon={TrendingUp}
+          delta={romDeltaPct}
+          hint={`цель ${KNEE_TARGET_ROM}°`}
+        />
+        <StatCard label="Приверженность" value={`${adherence}%`} icon={Target} hint="за 7 дней" />
+        <StatCard label="Серия дней" value={streak} icon={Flame} hint={streak > 0 ? "не пропускайте!" : "начните сегодня"} />
+        <StatCard label="Тренировок всего" value={mySessions.length} icon={Activity} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -88,10 +135,10 @@ export default function PatientDashboard() {
                     {done ? (
                       <Badge variant="success">Выполнено</Badge>
                     ) : (
-                      <Button size="sm" variant="outline">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-input bg-card px-3 py-2 text-sm font-medium">
                         <Play className="h-3.5 w-3.5" />
                         Начать
-                      </Button>
+                      </span>
                     )}
                   </Link>
                 );
@@ -115,8 +162,8 @@ export default function PatientDashboard() {
                     <stop offset="100%" stopColor="hsl(192 91% 40%)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="week" tick={{ fontSize: 11 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 11 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} width={32} />
+                <XAxis dataKey="week" tick={{ fontSize: 11 }} stroke="hsl(200 16% 50%)" tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 11 }} stroke="hsl(200 16% 50%)" tickLine={false} axisLine={false} width={32} />
                 <Tooltip
                   contentStyle={{ borderRadius: 12, border: "1px solid hsl(200 32% 89%)", fontSize: 12 }}
                   formatter={(v: number) => [`${v}%`, "Приверженность"]}
@@ -154,7 +201,12 @@ export default function PatientDashboard() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-2">
-          {SESSIONS.slice(0, 5).map((s) => {
+          {mySessions.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Пока нет тренировок. Начните первую — она появится здесь.
+            </p>
+          )}
+          {mySessions.slice(0, 5).map((s) => {
             const ex = getExercise(s.exercise);
             return (
               <div key={s.id} className="flex items-center gap-3 rounded-lg border border-border p-3">

@@ -2,9 +2,11 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { ScrollToTop } from "@/components/layout/ScrollToTop";
 import { useAuth } from "@/context/AuthContext";
 
 import Login from "@/pages/Login";
+import NotFound from "@/pages/NotFound";
 
 // Patient
 const PatientDashboard = lazy(() => import("@/pages/patient/Dashboard"));
@@ -48,7 +50,9 @@ function PageFallback() {
 
 export default function App() {
   return (
-    <Suspense fallback={<PageFallback />}>
+    <>
+      <ScrollToTop />
+      <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route path="/" element={<HomeRedirect />} />
         <Route path="/login" element={<Login />} />
@@ -60,6 +64,7 @@ export default function App() {
           <Route path="plan" element={<PatientPlan />} />
           <Route path="progress" element={<PatientProgress />} />
           <Route path="messages" element={<PatientMessages />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
 
         <Route path="/therapist" element={<AppShell role="therapist" />}>
@@ -68,12 +73,14 @@ export default function App() {
           <Route path="patients/:id" element={<TherapistPatientDetail />} />
           <Route path="plans" element={<TherapistPlans />} />
           <Route path="messages" element={<TherapistMessages />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
 
         <Route path="/doctor" element={<AppShell role="doctor" />}>
           <Route index element={<DoctorDashboard />} />
           <Route path="referrals" element={<DoctorReferrals />} />
           <Route path="reports" element={<DoctorReports />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
 
         <Route path="/admin" element={<AppShell role="admin" />}>
@@ -82,10 +89,12 @@ export default function App() {
           <Route path="exercises" element={<AdminExercises />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="audit" element={<AdminAudit />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
 
-        <Route path="*" element={<HomeRedirect />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
-    </Suspense>
+      </Suspense>
+    </>
   );
 }

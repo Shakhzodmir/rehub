@@ -1,16 +1,24 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { HashRouter } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
+import { SessionsProvider } from "@/context/SessionsContext";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import { Toaster } from "@/components/ui/toaster";
 import App from "./App";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <HashRouter>
+        <AuthProvider>
+          <SessionsProvider>
+            <App />
+            <Toaster />
+          </SessionsProvider>
+        </AuthProvider>
+      </HashRouter>
+    </ErrorBoundary>
   </React.StrictMode>
 );

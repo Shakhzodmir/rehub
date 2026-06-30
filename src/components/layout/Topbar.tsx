@@ -39,7 +39,6 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
           aria-label="Уведомления"
         >
           <Bell className="h-5 w-5" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-destructive ring-2 ring-background" />
         </button>
 
         <div className="flex items-center gap-2.5 rounded-full border border-border bg-card py-1 pl-1 pr-3">

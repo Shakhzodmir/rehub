@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
+import { Sheet } from "@/components/ui/dialog";
 import type { Role } from "@/lib/types";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
@@ -23,19 +24,10 @@ export function AppShell({ role }: { role: Role }) {
         </div>
       </aside>
 
-      {/* Mobile drawer */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div
-            className="absolute inset-0 bg-foreground/50 backdrop-blur-sm"
-            onClick={() => setMobileOpen(false)}
-            aria-hidden
-          />
-          <div className="absolute inset-y-0 left-0 w-72 animate-fade-in shadow-xl">
-            <Sidebar onNavigate={() => setMobileOpen(false)} />
-          </div>
-        </div>
-      )}
+      {/* Mobile drawer — accessible Sheet (focus trap, Escape, scroll lock) */}
+      <Sheet open={mobileOpen} onClose={() => setMobileOpen(false)} side="left" ariaLabel="Меню навигации">
+        <Sidebar onNavigate={() => setMobileOpen(false)} />
+      </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onMenu={() => setMobileOpen(true)} />

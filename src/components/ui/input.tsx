@@ -7,8 +7,9 @@ export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTML
       type={type}
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm transition-colors",
+        "flex h-11 w-full rounded-lg border border-input bg-card px-3 py-2 text-base transition-colors",
         "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        "aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive",
         "disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
@@ -23,8 +24,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttrib
     <textarea
       ref={ref}
       className={cn(
-        "flex min-h-[80px] w-full rounded-lg border border-input bg-card px-3 py-2 text-sm transition-colors",
+        "flex min-h-[80px] w-full rounded-lg border border-input bg-card px-3 py-2 text-base transition-colors",
         "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        "aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive",
         "disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}

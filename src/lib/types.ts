@@ -28,9 +28,23 @@ export interface ExerciseDef {
   mode: "rep" | "balance";
   /** joints tracked for the rep state-machine */
   joint: [number, number, number]; // [a, b(vertex), c] MediaPipe landmark indices
-  /** angle thresholds: down = contracted (flexed), up = extended */
+  /** angle thresholds: down = flexed (low angle), up = extended (high angle) */
   downAngle: number;
   upAngle: number;
+  /**
+   * Which extreme of the movement is the actual effort.
+   * "flex" → the contracted/low-angle position (squat down, push-up down). Default.
+   * "extend" → the extended/high-angle position (glute-bridge up, jumping-jack arms up).
+   */
+  effortPhase?: "flex" | "extend";
+  /** degrees the effort peak must pass the threshold to count as a clean rep (default 5) */
+  depthMargin?: number;
+  /** target range of motion in degrees — used for the recovery/ROM metric */
+  targetROM?: number;
+  /** sagittal = 2D angle (default); frontal/3d = use z to resist foreshortening */
+  plane?: "sagittal" | "frontal";
+  /** per-rep corrective cue spoken/shown when the effort peak is too shallow */
+  shallowCue?: string;
   cues: string[];
 }
 
@@ -64,6 +78,10 @@ export interface WorkoutSession {
   durationSec: number;
   formScore: number; // 0-100
   violations: number;
+  /** patient-reported pain right after the session, NPRS 0-10 */
+  painLevel?: number;
+  /** peak range of motion (degrees) measured during the session */
+  achievedROM?: number;
 }
 
 export interface Patient {
@@ -77,6 +95,8 @@ export interface Patient {
   adherence: number; // 0-100
   status: "active" | "at-risk" | "discharged";
   recoveryProgress: number; // 0-100
+  /** last patient-reported pain (NPRS 0-10) */
+  lastPain?: number;
   lastActive: string;
   startedAt: string;
 }

@@ -31,7 +31,7 @@ export const NAV: Record<Role, { home: string; items: NavItem[] }> = {
       { label: "Упражнения", to: "/patient/exercises", icon: Dumbbell },
       { label: "Мой план", to: "/patient/plan", icon: ClipboardList },
       { label: "Прогресс", to: "/patient/progress", icon: LineChart },
-      { label: "Сообщения", to: "/patient/messages", icon: MessageSquare, badge: "1" },
+      { label: "Сообщения", to: "/patient/messages", icon: MessageSquare },
     ],
   },
   therapist: {

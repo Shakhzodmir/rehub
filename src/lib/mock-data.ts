@@ -50,6 +50,7 @@ export const PATIENTS: Patient[] = [
     adherence: 86,
     status: "active",
     recoveryProgress: 64,
+    lastPain: 3,
     lastActive: new Date(Date.now() - 3 * 3600_000).toISOString(),
     startedAt: "2026-04-12",
   },
@@ -63,6 +64,7 @@ export const PATIENTS: Patient[] = [
     adherence: 41,
     status: "at-risk",
     recoveryProgress: 28,
+    lastPain: 6,
     lastActive: new Date(Date.now() - 5 * 86400_000).toISOString(),
     startedAt: "2026-05-02",
   },
@@ -158,14 +160,17 @@ function daysAgo(n: number) {
   return new Date(Date.now() - n * 86400_000).toISOString();
 }
 
+/** the patient seat used for the demo patient login (Анна / p-1) */
+export const CURRENT_PATIENT_ID = "p-1";
+
 export const SESSIONS: WorkoutSession[] = [
-  { id: "s-1", patientId: "p-1", date: daysAgo(0), exercise: "squats", reps: 11, targetReps: 12, durationSec: 320, formScore: 88, violations: 2 },
-  { id: "s-2", patientId: "p-1", date: daysAgo(0), exercise: "glute-bridge", reps: 15, targetReps: 15, durationSec: 240, formScore: 94, violations: 0 },
-  { id: "s-3", patientId: "p-1", date: daysAgo(1), exercise: "squats", reps: 12, targetReps: 12, durationSec: 300, formScore: 82, violations: 4 },
-  { id: "s-4", patientId: "p-1", date: daysAgo(2), exercise: "lunges", reps: 8, targetReps: 10, durationSec: 280, formScore: 76, violations: 5 },
-  { id: "s-5", patientId: "p-1", date: daysAgo(3), exercise: "squats", reps: 12, targetReps: 12, durationSec: 290, formScore: 90, violations: 1 },
-  { id: "s-6", patientId: "p-1", date: daysAgo(4), exercise: "glute-bridge", reps: 14, targetReps: 15, durationSec: 250, formScore: 91, violations: 1 },
-  { id: "s-7", patientId: "p-1", date: daysAgo(6), exercise: "squats", reps: 10, targetReps: 12, durationSec: 310, formScore: 79, violations: 3 },
+  { id: "s-1", patientId: "p-1", date: daysAgo(0), exercise: "squats", reps: 11, targetReps: 12, durationSec: 320, formScore: 88, violations: 2, painLevel: 3, achievedROM: 128 },
+  { id: "s-2", patientId: "p-1", date: daysAgo(0), exercise: "glute-bridge", reps: 15, targetReps: 15, durationSec: 240, formScore: 94, violations: 0, painLevel: 2, achievedROM: 168 },
+  { id: "s-3", patientId: "p-1", date: daysAgo(1), exercise: "squats", reps: 12, targetReps: 12, durationSec: 300, formScore: 82, violations: 4, painLevel: 3, achievedROM: 124 },
+  { id: "s-4", patientId: "p-1", date: daysAgo(2), exercise: "lunges", reps: 8, targetReps: 10, durationSec: 280, formScore: 76, violations: 5, painLevel: 4, achievedROM: 116 },
+  { id: "s-5", patientId: "p-1", date: daysAgo(3), exercise: "squats", reps: 12, targetReps: 12, durationSec: 290, formScore: 90, violations: 1, painLevel: 3, achievedROM: 121 },
+  { id: "s-6", patientId: "p-1", date: daysAgo(4), exercise: "glute-bridge", reps: 14, targetReps: 15, durationSec: 250, formScore: 91, violations: 1, painLevel: 3, achievedROM: 165 },
+  { id: "s-7", patientId: "p-1", date: daysAgo(6), exercise: "squats", reps: 10, targetReps: 12, durationSec: 310, formScore: 79, violations: 3, painLevel: 4, achievedROM: 112 },
 ];
 
 /** weekly adherence trend for charts */
