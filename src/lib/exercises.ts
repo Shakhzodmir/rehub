@@ -24,7 +24,17 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     depthMargin: 8,
     targetROM: 135,
     plane: "sagittal",
+    minTempoMs: 1200,
     shallowCue: "Глубже — опускайтесь ниже",
+    formRules: [
+      {
+        id: "trunk-lean",
+        kind: "incline",
+        joints: [12, 24], // shoulder→hip tilt from vertical, side view
+        max: 55, // deep-squat lean is normally 30-45°; beyond ~55° the load shifts to the lower back
+        cue: "Спину прямее — грудь вперёд",
+      },
+    ],
     cues: [
       "Спина прямая, взгляд вперёд",
       "Колени не выходят за носки",
@@ -45,7 +55,17 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "flex",
     depthMargin: 8,
     plane: "sagittal",
+    minTempoMs: 1000,
     shallowCue: "Ниже — сгибайте локти сильнее",
+    formRules: [
+      {
+        id: "body-line",
+        kind: "angle",
+        joints: [12, 24, 26], // shoulder-hip-knee: a straight body reads ≈175°
+        min: 155, // sagging or piking hips both collapse this angle
+        cue: "Держите корпус прямой линией",
+      },
+    ],
     cues: ["Корпус прямой линией", "Локти под 45°", "Опускайтесь до угла ~90° в локте"],
   },
   "jumping-jacks": {
@@ -79,7 +99,17 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "flex",
     depthMargin: 8,
     plane: "sagittal",
+    minTempoMs: 1200,
     shallowCue: "Глубже — переднее колено к 90°",
+    formRules: [
+      {
+        id: "trunk-upright",
+        kind: "incline",
+        joints: [12, 24], // torso must stay near vertical in a lunge
+        max: 25,
+        cue: "Корпус вертикально — не наклоняйтесь вперёд",
+      },
+    ],
     cues: ["Переднее колено под 90°", "Корпус вертикально", "Колено не касается пола резко"],
   },
   "glute-bridge": {
@@ -96,8 +126,28 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "extend",
     depthMargin: 6,
     plane: "sagittal",
+    minTempoMs: 1000,
     shallowCue: "Выше — таз до прямой линии",
     cues: ["Поднимайте таз до прямой линии", "Сжимайте ягодицы наверху", "Не прогибайте поясницу"],
+  },
+  plank: {
+    key: "plank",
+    name: "Планка",
+    emoji: "🧘",
+    focus: "Кор",
+    description: "Изометрическое удержание корпуса прямой линией на предплечьях.",
+    difficulty: "Среднее",
+    mode: "hold",
+    joint: [12, 24, 26], // shoulder-hip-knee: the body-line angle, side view
+    downAngle: 155, // in-zone floor — below this the hips sag or pike
+    upAngle: 180,
+    holdTargetSec: 30,
+    plane: "sagittal",
+    cues: [
+      "Тело прямой линией от плеч до пяток",
+      "Подтяните живот, не провисайте тазом",
+      "Дышите ровно, не задерживайте дыхание",
+    ],
   },
   "heel-toe": {
     key: "heel-toe",

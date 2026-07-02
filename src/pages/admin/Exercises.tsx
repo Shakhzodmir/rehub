@@ -58,11 +58,13 @@ export default function AdminExercises() {
                   </TD>
                   <TD>
                     <Badge variant={ex.mode === "rep" ? "default" : "secondary"}>
-                      {ex.mode === "rep" ? "повторения" : "баланс"}
+                      {ex.mode === "rep" ? "повторения" : ex.mode === "hold" ? "удержание" : "баланс"}
                     </Badge>
                   </TD>
                   <TD className="text-sm tabular-nums text-muted-foreground">
-                    {ex.mode === "rep" ? `[${ex.joint.join(", ")}] · ${ex.downAngle}°–${ex.upAngle}°` : "—"}
+                    {ex.mode === "balance"
+                      ? "—"
+                      : `[${ex.joint.join(", ")}] · ${ex.downAngle}°–${ex.upAngle}°`}
                   </TD>
                   <TD>
                     <Button variant="ghost" size="icon" aria-label={`Изменить ${ex.name}`}>

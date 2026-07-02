@@ -30,10 +30,43 @@ export function calculateAngle(a: Point, b: Point, c: Point, use3D = false): num
 }
 
 /**
+ * Tilt (degrees) of the bottom→top segment away from vertical: 0° = perfectly
+ * upright, 90° = horizontal. Image y grows downward, so "top above bottom"
+ * means top.y < bottom.y. Used for torso-lean checks on standing exercises.
+ */
+export function inclineFromVertical(top: Point, bottom: Point): number {
+  const dx = Math.abs(top.x - bottom.x);
+  const dy = bottom.y - top.y; // positive when top is above bottom
+  return (Math.atan2(dx, Math.max(dy, 1e-6)) * 180) / Math.PI;
+}
+
+/**
  * True if all three landmarks are confidently visible.
  * Fail-closed: a missing visibility score is treated as 0 (not visible), so
  * occluded / off-frame joints stop the rep counter instead of logging phantoms.
  */
 export function jointVisible(a?: Point, b?: Point, c?: Point, min = 0.5): boolean {
   return [a, b, c].every((p) => p != null && (p.visibility ?? 0) >= min);
+}
+
+/** Minimum visibility across a set of landmark indices (fail-closed to 0). */
+export function minVisibility(lm: Point[], indices: number[]): number {
+  let min = 1;
+  for (const i of indices) min = Math.min(min, lm[i]?.visibility ?? 0);
+  return min;
+}
+
+// left↔right MediaPipe landmark pairs (shoulders, elbows, wrists, hips, knees, ankles, heels, feet)
+const MIRROR_PAIRS: Array<[number, number]> = [
+  [11, 12], [13, 14], [15, 16], [23, 24], [25, 26], [27, 28], [29, 30], [31, 32],
+];
+const MIRROR: Record<number, number> = {};
+for (const [l, r] of MIRROR_PAIRS) {
+  MIRROR[l] = r;
+  MIRROR[r] = l;
+}
+
+/** The same joint set on the opposite body side (unpaired joints map to themselves). */
+export function mirrorJoints<T extends number[]>(joints: T): T {
+  return joints.map((j) => MIRROR[j] ?? j) as T;
 }

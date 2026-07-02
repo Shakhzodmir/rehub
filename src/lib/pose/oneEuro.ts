@@ -65,3 +65,41 @@ export class OneEuroFilter {
     this.lastTimeMs = null;
   }
 }
+
+interface SmoothablePoint {
+  x: number;
+  y: number;
+  z?: number;
+  visibility?: number;
+}
+
+/**
+ * Per-landmark One Euro smoothing for the drawn skeleton only — the rep-counting
+ * path keeps its own scalar angle filter untouched. Position filters are tuned
+ * snappier than the angle filter (higher beta) so fast limbs don't trail.
+ * z / visibility pass through unfiltered (z is only used for point radius).
+ */
+export class LandmarkSmoother {
+  private filters: Array<{ x: OneEuroFilter; y: OneEuroFilter }> = [];
+
+  smooth<T extends SmoothablePoint>(landmarks: T[], timestampMs: number): T[] {
+    while (this.filters.length < landmarks.length) {
+      this.filters.push({
+        x: new OneEuroFilter(1.5, 0.5),
+        y: new OneEuroFilter(1.5, 0.5),
+      });
+    }
+    return landmarks.map((p, i) => ({
+      ...p,
+      x: this.filters[i].x.filter(p.x, timestampMs),
+      y: this.filters[i].y.filter(p.y, timestampMs),
+    }));
+  }
+
+  reset() {
+    for (const f of this.filters) {
+      f.x.reset();
+      f.y.reset();
+    }
+  }
+}

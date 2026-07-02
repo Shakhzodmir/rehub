@@ -123,6 +123,7 @@ export const ACTIVE_PLAN: TreatmentPlan = {
     { key: "squats", targetReps: 12, targetSets: 3 },
     { key: "glute-bridge", targetReps: 15, targetSets: 3, holdSeconds: 3 },
     { key: "lunges", targetReps: 10, targetSets: 2 },
+    { key: "plank", targetReps: 1, targetSets: 1, holdSeconds: 30 },
     { key: "heel-toe", targetReps: 20, targetSets: 1 },
   ],
 };

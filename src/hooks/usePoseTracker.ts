@@ -4,43 +4,51 @@ import {
   FilesetResolver,
   PoseLandmarker,
   type NormalizedLandmark,
-  type Landmark,
 } from "@mediapipe/tasks-vision";
 import type { ExerciseDef } from "@/lib/types";
-import { calculateAngle, jointVisible } from "@/lib/pose/angle";
-import { OneEuroFilter } from "@/lib/pose/oneEuro";
+import {
+  ExerciseEngine,
+  type EngineSnapshot,
+  type Positioning,
+  type Stage,
+} from "@/lib/pose/engine";
+import { LandmarkSmoother } from "@/lib/pose/oneEuro";
 
 const WASM_PATH =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
 const MODEL_PATH =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-// minimum time between counted reps — rejects jitter that briefly recrosses both thresholds
-const MIN_REP_MS = 600;
 // don't repeat the same spoken cue more often than this
 const SPEAK_COOLDOWN_MS = 1500;
+// UI re-renders are capped at this rate; rep/stage/positioning changes bypass the cap
+const STATS_PUSH_MS = 100;
+// this many consecutive detectForVideo failures triggers one CPU re-init …
+const REINIT_ERR_STREAK = 5;
+// … and this many gives up with a visible error
+const FATAL_ERR_STREAK = 60;
 
-export type Stage = "up" | "down" | "unknown";
-export type Positioning = "good" | "no-pose" | "low-visibility";
+export type { Stage, Positioning };
 
 export interface RepEvent {
   good: boolean;
   cue: string | null;
   count: number;
+  /** effort-extreme angle of the rep, degrees */
+  peakAngle: number;
+  /** effort start → completion, ms */
+  durationMs: number | null;
 }
 
-export interface PoseStats {
-  reps: number;
-  stage: Stage;
-  angle: number;
-  positioning: Positioning;
-  goodReps: number;
-  violations: number;
+export type Delegate = "GPU" | "CPU";
+
+export interface PoseStats extends EngineSnapshot {
+  /** smoothed frames-per-second of the analysis loop */
   fps: number;
-  /** 0-100 posture stability, balance exercises only */
-  balanceScore: number;
-  /** peak range of motion reached this session, in degrees */
-  achievedROM: number;
+  /** smoothed pose-inference latency, ms */
+  inferenceMs: number;
+  /** which compute delegate is running — surfaces GPU fallbacks for remote diagnosis */
+  delegate: Delegate;
 }
 
 interface Options {
@@ -50,20 +58,37 @@ interface Options {
   canvasRef: React.RefObject<HTMLCanvasElement>;
   /** Russian voice guidance via the Web Speech API */
   voice?: boolean;
+  /** rep mode: required pause at the effort extreme (from the treatment plan) */
+  holdSeconds?: number;
   onRep?: (e: RepEvent) => void;
 }
 
 const INITIAL: PoseStats = {
   reps: 0,
+  goodReps: 0,
+  violations: 0,
   stage: "unknown",
   angle: 0,
   positioning: "no-pose",
-  goodReps: 0,
-  violations: 0,
-  fps: 0,
   balanceScore: 100,
   achievedROM: 0,
+  side: "right",
+  activeJoints: [0, 0, 0],
+  symmetry: null,
+  lastRepMs: null,
+  avgRepMs: null,
+  holdMs: 0,
+  holding: false,
+  trackedMs: 0,
+  depthPct: 0,
+  fps: 0,
+  inferenceMs: 0,
+  delegate: "GPU",
 };
+
+const ZONE_DEEP = "#10B981"; // effort target reached
+const ZONE_ACTIVE = "#22D3EE"; // moving toward the target
+const ZONE_HOLD_OFF = "#F59E0B"; // hold mode, out of the zone
 
 export function usePoseTracker({
   exercise,
@@ -71,6 +96,7 @@ export function usePoseTracker({
   videoRef,
   canvasRef,
   voice = false,
+  holdSeconds,
   onRep,
 }: Options) {
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -84,24 +110,6 @@ export function usePoseTracker({
   const drawRef = useRef<DrawingUtils | null>(null);
   const lastVideoTimeRef = useRef(-1);
 
-  // mutable tracking state (avoids re-renders inside the rAF loop)
-  const repsRef = useRef(0);
-  const goodRef = useRef(0);
-  const violRef = useRef(0);
-  const stageRef = useRef<Stage>("unknown");
-  const cycleRef = useRef<"rest" | "effort" | "unknown">("unknown");
-  const peakRef = useRef(180); // effort peak within the current rep
-  const bestEffortRef = useRef(180); // best effort peak across the session
-  const lastRepTsRef = useRef(0);
-  const visibleRef = useRef(false);
-  const filterRef = useRef<OneEuroFilter | null>(null);
-  const lastTsRef = useRef(performance.now());
-
-  // balance-mode stability tracking
-  const swayMeanRef = useRef<number | null>(null);
-  const swayRef = useRef(0);
-  const balanceRef = useRef(100);
-
   // voice (kept in a ref so toggling it never restarts the camera/model)
   const voiceRef = useRef(voice);
   const lastSpeakRef = useRef(0);
@@ -110,13 +118,35 @@ export function usePoseTracker({
     if (!voice && typeof window !== "undefined") window.speechSynthesis?.cancel();
   }, [voice]);
 
+  const onRepRef = useRef(onRep);
+  useEffect(() => {
+    onRepRef.current = onRep;
+  }, [onRep]);
+
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
+    let stopped = false; // loop halted on purpose (fatal error)
 
-    const effortIsFlex = exercise.effortPhase !== "extend";
-    const depthMargin = exercise.depthMargin ?? 5;
-    const use3D = exercise.plane === "frontal";
+    const engine = new ExerciseEngine(exercise, { holdSeconds });
+    const smoother = new LandmarkSmoother();
+    let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
+    let delegate: Delegate = "GPU";
+
+    // timing / telemetry
+    let lastDetectTs = 0;
+    let dtEma: number | null = null;
+    let detEma: number | null = null;
+    let lastFrameTs = performance.now();
+
+    // failure handling
+    let errStreak = 0;
+    let reinitStarted = false;
+    let reinitInFlight = false;
+
+    // render throttling
+    let lastPushTs = 0;
+    let lastPushed = { reps: -1, stage: "", positioning: "", holding: false };
 
     function speak(text: string, force = false) {
       if (!voiceRef.current || typeof window === "undefined") return;
@@ -132,39 +162,35 @@ export function usePoseTracker({
       synth.speak(u);
     }
 
+    function createLandmarker(d: Delegate) {
+      return PoseLandmarker.createFromOptions(vision!, {
+        baseOptions: { modelAssetPath: MODEL_PATH, delegate: d },
+        runningMode: "VIDEO",
+        numPoses: 1,
+        minPoseDetectionConfidence: 0.6,
+        minPosePresenceConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+        outputSegmentationMasks: false,
+      });
+    }
+
     async function setup() {
       try {
         setStatus("loading");
         setError(null);
-        // reset trackers for a fresh session
-        repsRef.current = 0;
-        goodRef.current = 0;
-        violRef.current = 0;
-        stageRef.current = "unknown";
-        cycleRef.current = "unknown";
-        peakRef.current = effortIsFlex ? 180 : 0;
-        bestEffortRef.current = effortIsFlex ? 180 : 0;
-        lastRepTsRef.current = 0;
-        visibleRef.current = false;
-        filterRef.current = new OneEuroFilter(1.0, 0.05);
-        swayMeanRef.current = null;
-        swayRef.current = 0;
-        balanceRef.current = 100;
         setStats(INITIAL);
 
-        const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
+        vision = await FilesetResolver.forVisionTasks(WASM_PATH);
         if (cancelled) return;
-        const landmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: MODEL_PATH, delegate: "GPU" },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.6,
-          minPosePresenceConfidence: 0.6,
-          minTrackingConfidence: 0.6,
-          outputSegmentationMasks: false,
-        });
+        // some devices lose or lack a usable GPU context — fall back to CPU
+        try {
+          landmarkerRef.current = await createLandmarker("GPU");
+        } catch (e) {
+          console.warn("GPU delegate failed, falling back to CPU", e);
+          delegate = "CPU";
+          landmarkerRef.current = await createLandmarker("CPU");
+        }
         if (cancelled) return;
-        landmarkerRef.current = landmarker;
 
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: 1280, height: 720, facingMode: "user" },
@@ -175,6 +201,15 @@ export function usePoseTracker({
           return;
         }
         streamRef.current = stream;
+        // surface mid-session camera unplug / permission revoke instead of freezing
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+          if (!cancelled) {
+            stopped = true;
+            setStatus("error");
+            setError("Камера отключилась. Проверьте подключение и повторите.");
+          }
+        });
+
         const video = videoRef.current;
         if (!video) return;
         video.srcObject = stream;
@@ -193,13 +228,50 @@ export function usePoseTracker({
       }
     }
 
+    // one-shot recovery: recreate the landmarker on CPU after repeated failures
+    // (typical cause — a lost WebGL context mid-session)
+    async function reinitLandmarker() {
+      reinitInFlight = true;
+      try {
+        const next = await createLandmarker("CPU");
+        if (cancelled) {
+          next.close();
+          return;
+        }
+        landmarkerRef.current?.close();
+        landmarkerRef.current = next;
+        delegate = "CPU";
+        errStreak = 0;
+        smoother.reset();
+      } catch (e) {
+        console.error("landmarker re-init failed", e);
+        if (!cancelled) {
+          stopped = true;
+          setStatus("error");
+          setError("Сбой анализа позы. Нажмите «Повторить».");
+        }
+      } finally {
+        reinitInFlight = false;
+      }
+    }
+
     function loop() {
+      if (cancelled || stopped) return;
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const landmarker = landmarkerRef.current;
-      if (!video || !canvas || !landmarker) return;
+      if (!video || !canvas || !landmarker) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
 
-      if (video.readyState >= 2 && video.currentTime !== lastVideoTimeRef.current) {
+      const frameIsNew =
+        video.readyState >= 2 &&
+        video.videoWidth > 0 && // a 0×0 frame during camera renegotiation crashes detect
+        video.currentTime !== lastVideoTimeRef.current &&
+        !reinitInFlight;
+
+      if (frameIsNew) {
         lastVideoTimeRef.current = video.currentTime;
 
         // size the canvas only when the video dimensions actually change
@@ -215,151 +287,193 @@ export function usePoseTracker({
           return;
         }
 
-        const result = landmarker.detectForVideo(video, performance.now());
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // MediaPipe VIDEO mode requires strictly increasing timestamps
+        const ts = Math.max(performance.now(), lastDetectTs + 1);
+        lastDetectTs = ts;
+
+        let result: ReturnType<PoseLandmarker["detectForVideo"]> | null = null;
+        try {
+          const t0 = performance.now();
+          result = landmarker.detectForVideo(video, ts);
+          const det = performance.now() - t0;
+          detEma = detEma === null ? det : detEma * 0.9 + det * 0.1;
+          errStreak = 0;
+        } catch (e) {
+          errStreak += 1;
+          if (errStreak === 1) console.error("detectForVideo failed", e);
+          if (errStreak >= REINIT_ERR_STREAK && !reinitStarted) {
+            reinitStarted = true;
+            void reinitLandmarker();
+          }
+          if (errStreak >= FATAL_ERR_STREAK) {
+            stopped = true;
+            setStatus("error");
+            setError("Сбой анализа позы. Нажмите «Повторить».");
+            return;
+          }
+          rafRef.current = requestAnimationFrame(loop);
+          return;
+        }
+
+        const dt = ts - lastFrameTs;
+        lastFrameTs = ts;
+        if (dt > 0) dtEma = dtEma === null ? dt : dtEma * 0.9 + dt * 0.1;
 
         const lm = result.landmarks?.[0];
         const wl = result.worldLandmarks?.[0];
-        if (lm) {
-          drawSkeleton(lm);
-          process(lm, wl);
-        } else {
-          cycleRef.current = "unknown";
-          pushStats("no-pose", 0);
+        const valid =
+          lm && lm.length >= 33 && Number.isFinite(lm[0].x) && Number.isFinite(lm[0].y);
+
+        const snap = engine.step(valid ? lm : null, wl, ts);
+
+        for (const ev of engine.takeEvents()) {
+          if (ev.type === "rep") {
+            if (ev.good) speak(String(ev.count));
+            else if (ev.cue) speak(ev.cue);
+            onRepRef.current?.({
+              good: ev.good,
+              cue: ev.cue,
+              count: ev.count,
+              peakAngle: ev.peakAngle,
+              durationMs: ev.durationMs,
+            });
+          } else if (ev.type === "hold-milestone") {
+            speak(`${ev.sec} секунд`, true);
+          } else if (ev.type === "hold-target") {
+            speak("Отлично! Цель удержания достигнута", true);
+          }
         }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (valid) {
+          // the video element is CSS-mirrored; the canvas is not, so text stays
+          // readable — mirror the points in code to line up with the video
+          const smooth = smoother.smooth(lm, ts);
+          const mirrored = smooth.map((p) => ({ ...p, x: 1 - p.x }));
+          drawOverlay(ctx, canvas, mirrored, snap);
+        } else {
+          smoother.reset();
+        }
+
+        pushStats(snap, ts);
       }
       rafRef.current = requestAnimationFrame(loop);
     }
 
-    function drawSkeleton(lm: NormalizedLandmark[]) {
+    function drawOverlay(
+      ctx: CanvasRenderingContext2D,
+      canvas: HTMLCanvasElement,
+      lm: NormalizedLandmark[],
+      snap: EngineSnapshot
+    ) {
       const utils = drawRef.current;
       if (!utils) return;
+
+      // full skeleton, muted — background context
       utils.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, {
-        color: "rgba(8,145,178,0.9)",
-        lineWidth: 4,
+        color: "rgba(8,145,178,0.35)",
+        lineWidth: 3,
       });
       utils.drawLandmarks(lm, {
-        radius: (d) => DrawingUtils.lerp(d.from?.z ?? 0, -0.15, 0.1, 5, 2),
-        color: "#22D3EE",
-        fillColor: "#22D3EE",
+        radius: (d) => DrawingUtils.lerp(d.from?.z ?? 0, -0.15, 0.1, 4, 2),
+        color: "rgba(34,211,238,0.6)",
+        fillColor: "rgba(34,211,238,0.6)",
         lineWidth: 1,
       });
-    }
 
-    function updateVisibility(a?: NormalizedLandmark, b?: NormalizedLandmark, c?: NormalizedLandmark) {
-      const minVis = Math.min(a?.visibility ?? 0, b?.visibility ?? 0, c?.visibility ?? 0);
-      // hysteresis: trust above 0.6, distrust below 0.4 — stops status flicker
-      if (visibleRef.current && minVis < 0.4) visibleRef.current = false;
-      else if (!visibleRef.current && minVis > 0.6) visibleRef.current = true;
-      return visibleRef.current;
-    }
+      if (exercise.mode === "balance" || snap.positioning !== "good") return;
 
-    function process(lm: NormalizedLandmark[], wl?: Landmark[]) {
-      const [ai, bi, ci] = exercise.joint;
-
-      if (exercise.mode === "balance") {
-        // sway of the hip midpoint (landmarks 23/24) → stability score
-        const lh = lm[23];
-        const rh = lm[24];
-        if (!jointVisible(lh, rh, lm[bi])) {
-          pushStats("low-visibility", 0);
-          return;
-        }
-        const midX = ((lh?.x ?? 0) + (rh?.x ?? 0)) / 2;
-        swayMeanRef.current =
-          swayMeanRef.current === null ? midX : swayMeanRef.current * 0.95 + midX * 0.05;
-        const dev = Math.abs(midX - swayMeanRef.current);
-        swayRef.current = swayRef.current * 0.9 + dev * 0.1;
-        balanceRef.current = Math.max(0, Math.min(100, Math.round(100 - swayRef.current * 1500)));
-        pushStats("good", 0);
-        return;
-      }
-
+      const [ai, bi, ci] = snap.activeJoints;
       const a = lm[ai];
       const b = lm[bi];
       const c = lm[ci];
+      if (!a || !b || !c) return;
 
-      if (!jointVisible(a, b, c) || !updateVisibility(a, b, c)) {
-        // keep cycle/peak intact so a brief occlusion mid-rep doesn't drop the count
-        pushStats("low-visibility", 0);
-        return;
+      const w = canvas.width;
+      const h = canvas.height;
+      const ax = a.x * w, ay = a.y * h;
+      const bx = b.x * w, by = b.y * h;
+      const cx = c.x * w, cy = c.y * h;
+
+      const color =
+        exercise.mode === "hold"
+          ? snap.holding
+            ? ZONE_DEEP
+            : ZONE_HOLD_OFF
+          : snap.depthPct >= 100
+            ? ZONE_DEEP
+            : ZONE_ACTIVE;
+
+      // tracked joint triplet, highlighted
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 6;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(cx, cy);
+      ctx.stroke();
+      for (const [px, py] of [[ax, ay], [bx, by], [cx, cy]] as const) {
+        ctx.beginPath();
+        ctx.arc(px, py, 7, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
       }
 
-      // 3D world angle for frontal-plane moves (resists foreshortening), else 2D
-      const src = use3D && wl ? wl : lm;
-      const raw = calculateAngle(src[ai], src[bi], src[ci], use3D);
-      const angle = filterRef.current!.filter(raw, performance.now());
+      // angle arc at the vertex
+      const r = Math.min(48, Math.max(24, h * 0.06));
+      const t1 = Math.atan2(ay - by, ax - bx);
+      const t2 = Math.atan2(cy - by, cx - bx);
+      let delta = t2 - t1;
+      while (delta > Math.PI) delta -= 2 * Math.PI;
+      while (delta < -Math.PI) delta += 2 * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.arc(bx, by, r, t1, t2, delta < 0);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba(color, 0.25);
+      ctx.fill();
 
-      // positional stage (for the HUD)
-      stageRef.current =
-        angle <= exercise.downAngle ? "down" : angle >= exercise.upAngle ? "up" : stageRef.current;
-
-      const atRest = effortIsFlex ? angle > exercise.upAngle : angle < exercise.downAngle;
-      const atEffort = effortIsFlex ? angle < exercise.downAngle : angle > exercise.upAngle;
-
-      if (cycleRef.current === "unknown") {
-        if (atRest) cycleRef.current = "rest";
-      } else if (cycleRef.current === "rest") {
-        if (atEffort) {
-          cycleRef.current = "effort";
-          peakRef.current = angle;
-        }
-      } else if (cycleRef.current === "effort") {
-        peakRef.current = effortIsFlex
-          ? Math.min(peakRef.current, angle)
-          : Math.max(peakRef.current, angle);
-        bestEffortRef.current = effortIsFlex
-          ? Math.min(bestEffortRef.current, peakRef.current)
-          : Math.max(bestEffortRef.current, peakRef.current);
-
-        if (atRest) {
-          const now = performance.now();
-          if (now - lastRepTsRef.current >= MIN_REP_MS) {
-            lastRepTsRef.current = now;
-            repsRef.current += 1;
-            const good = effortIsFlex
-              ? peakRef.current <= exercise.downAngle - depthMargin
-              : peakRef.current >= exercise.upAngle + depthMargin;
-            let cue: string | null = null;
-            if (good) {
-              goodRef.current += 1;
-              speak(String(repsRef.current));
-            } else {
-              violRef.current += 1;
-              cue = exercise.shallowCue ?? "Шире амплитуду";
-              speak(cue);
-            }
-            onRep?.({ good, cue, count: repsRef.current });
-          }
-          cycleRef.current = "rest";
-        }
+      // angle readout pill next to the vertex, clamped into the frame
+      const label = `${snap.angle}°`;
+      ctx.font = "600 16px system-ui, sans-serif";
+      const tw = ctx.measureText(label).width;
+      const pw = tw + 16;
+      const ph = 26;
+      const px = Math.min(Math.max(bx + r + 10, 4), w - pw - 4);
+      const py = Math.min(Math.max(by - ph / 2, 4), h - ph - 4);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      if (typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(px, py, pw, ph, 8);
+        ctx.fill();
+      } else {
+        ctx.fillRect(px, py, pw, ph);
       }
-
-      pushStats("good", angle);
+      ctx.fillStyle = "#fff";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, px + 8, py + ph / 2 + 1);
     }
 
-    function pushStats(positioning: Positioning, angle: number) {
-      const now = performance.now();
-      const dt = now - lastTsRef.current;
-      lastTsRef.current = now;
-      const fps = dt > 0 ? Math.round(1000 / dt) : 0;
-      const effortIsFlexLocal = exercise.effortPhase !== "extend";
-      const achievedROM =
-        exercise.mode === "balance"
-          ? 0
-          : effortIsFlexLocal
-            ? Math.max(0, Math.round(180 - bestEffortRef.current))
-            : Math.round(bestEffortRef.current);
+    function pushStats(snap: EngineSnapshot, now: number) {
+      const changed =
+        snap.reps !== lastPushed.reps ||
+        snap.stage !== lastPushed.stage ||
+        snap.positioning !== lastPushed.positioning ||
+        snap.holding !== lastPushed.holding;
+      if (!changed && now - lastPushTs < STATS_PUSH_MS) return;
+      lastPushTs = now;
+      lastPushed = {
+        reps: snap.reps,
+        stage: snap.stage,
+        positioning: snap.positioning,
+        holding: snap.holding,
+      };
       setStats({
-        reps: repsRef.current,
-        goodReps: goodRef.current,
-        violations: violRef.current,
-        stage: stageRef.current,
-        angle: Math.round(angle),
-        positioning,
-        fps,
-        balanceScore: balanceRef.current,
-        achievedROM,
+        ...snap,
+        fps: dtEma ? Math.round(1000 / dtEma) : 0,
+        inferenceMs: detEma ? Math.round(detEma) : 0,
+        delegate,
       });
     }
 
@@ -378,7 +492,12 @@ export function usePoseTracker({
       if (typeof window !== "undefined") window.speechSynthesis?.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, exercise.key]);
+  }, [active, exercise.key, holdSeconds]);
 
   return { status, error, stats };
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }

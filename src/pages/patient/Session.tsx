@@ -9,6 +9,7 @@ import {
   Loader2,
   RotateCcw,
   Save,
+  Scale,
   ScanLine,
   Square,
   Timer,
@@ -25,7 +26,7 @@ import { getExercise } from "@/lib/exercises";
 import { ACTIVE_PLAN, CURRENT_PATIENT_ID } from "@/lib/mock-data";
 import { usePoseTracker, type RepEvent } from "@/hooks/usePoseTracker";
 import { useSessions } from "@/context/SessionsContext";
-import type { ExerciseKey } from "@/lib/types";
+import type { ExerciseKey, RepRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Phase = "ready" | "active" | "done";
@@ -37,7 +38,24 @@ interface FinalStats {
   duration: number;
   achievedROM: number;
   formScore: number;
+  avgRepSec: number | null;
+  symmetry: number | null;
+  holdSec: number;
+  repHistory: RepRecord[];
 }
+
+const EMPTY_FINAL: FinalStats = {
+  reps: 0,
+  good: 0,
+  violations: 0,
+  duration: 0,
+  achievedROM: 0,
+  formScore: 100,
+  avgRepSec: null,
+  symmetry: null,
+  holdSec: 0,
+  repHistory: [],
+};
 
 export default function PatientSession() {
   const { key } = useParams<{ key: ExerciseKey }>();
@@ -50,6 +68,8 @@ export default function PatientSession() {
   const targetSets = planItem?.targetSets ?? 3;
   const goal = targetReps * targetSets;
   const isBalance = exercise?.mode === "balance";
+  const isHold = exercise?.mode === "hold";
+  const holdTarget = planItem?.holdSeconds ?? exercise?.holdTargetSec ?? 30;
 
   const [phase, setPhase] = useState<Phase>("ready");
   const [elapsed, setElapsed] = useState(0);
@@ -57,14 +77,8 @@ export default function PatientSession() {
   const [calibrated, setCalibrated] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; good: boolean } | null>(null);
   const [live, setLive] = useState("");
-  const [finalStats, setFinalStats] = useState<FinalStats>({
-    reps: 0,
-    good: 0,
-    violations: 0,
-    duration: 0,
-    achievedROM: 0,
-    formScore: 100,
-  });
+  const [repHistory, setRepHistory] = useState<RepRecord[]>([]);
+  const [finalStats, setFinalStats] = useState<FinalStats>(EMPTY_FINAL);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -79,6 +93,14 @@ export default function PatientSession() {
       setLive(`Повтор ${e.count}. ${e.cue ?? "Поправьте технику"}`);
       setFeedback({ text: e.cue ?? "Поправьте технику", good: false });
     }
+    setRepHistory((prev) => [
+      ...prev,
+      {
+        good: e.good,
+        peakAngle: e.peakAngle,
+        durationSec: e.durationMs != null ? Math.round(e.durationMs / 100) / 10 : undefined,
+      },
+    ]);
     window.clearTimeout(feedbackTimer.current);
     feedbackTimer.current = window.setTimeout(() => setFeedback(null), 2600);
   }, []);
@@ -89,6 +111,7 @@ export default function PatientSession() {
     videoRef,
     canvasRef,
     voice: voiceOn,
+    holdSeconds: planItem?.holdSeconds,
     onRep,
   });
 
@@ -96,6 +119,7 @@ export default function PatientSession() {
   useEffect(() => {
     if (phase !== "active") return;
     startRef.current = Date.now();
+    setRepHistory([]);
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 250);
     return () => clearInterval(id);
   }, [phase]);
@@ -111,11 +135,19 @@ export default function PatientSession() {
 
   useEffect(() => () => window.clearTimeout(feedbackTimer.current), []);
 
+  const holdSec = Math.floor(stats.holdMs / 1000);
+
   const formScore = useMemo(() => {
     if (isBalance) return stats.balanceScore;
+    if (isHold) {
+      // efficiency: share of tracked time actually spent in the correct position
+      return stats.trackedMs > 2000 ? Math.round((stats.holdMs / stats.trackedMs) * 100) : 100;
+    }
     return stats.reps > 0 ? Math.round((stats.goodReps / stats.reps) * 100) : 100;
-  }, [isBalance, stats.balanceScore, stats.reps, stats.goodReps]);
+  }, [isBalance, isHold, stats.balanceScore, stats.trackedMs, stats.holdMs, stats.reps, stats.goodReps]);
+
   const repProgress = Math.min(100, goal > 0 ? (stats.reps / goal) * 100 : 0);
+  const holdProgress = Math.min(100, holdTarget > 0 ? (holdSec / holdTarget) * 100 : 0);
 
   if (!exercise) {
     return (
@@ -137,7 +169,11 @@ export default function PatientSession() {
       violations: stats.violations,
       duration: elapsed,
       achievedROM: stats.achievedROM,
-      formScore: isBalance ? stats.balanceScore : formScore,
+      formScore,
+      avgRepSec: stats.avgRepMs != null ? Math.round(stats.avgRepMs / 100) / 10 : null,
+      symmetry: stats.symmetry,
+      holdSec,
+      repHistory,
     });
     setPhase("done");
   };
@@ -147,23 +183,37 @@ export default function PatientSession() {
       patientId: CURRENT_PATIENT_ID,
       date: new Date().toISOString(),
       exercise: exercise.key,
-      reps: finalStats.reps,
-      targetReps: goal,
+      // hold mode maps to one done/failed "rep" so adherence ratios stay meaningful
+      reps: isHold ? (finalStats.holdSec >= holdTarget ? 1 : 0) : finalStats.reps,
+      targetReps: isHold ? 1 : goal,
       durationSec: finalStats.duration,
       formScore: finalStats.formScore,
       violations: finalStats.violations,
       painLevel,
       achievedROM: finalStats.achievedROM || undefined,
+      avgRepSec: finalStats.avgRepSec ?? undefined,
+      symmetry: finalStats.symmetry ?? undefined,
+      holdSec: isHold ? finalStats.holdSec : undefined,
+      repHistory: finalStats.repHistory.length ? finalStats.repHistory : undefined,
     });
     toast({
       title: "Тренировка сохранена",
-      description: `${exercise.name}: ${finalStats.reps} повт., техника ${finalStats.formScore}%, боль ${painLevel}/10`,
+      description: isHold
+        ? `${exercise.name}: удержание ${finalStats.holdSec} с, боль ${painLevel}/10`
+        : `${exercise.name}: ${finalStats.reps} повт., техника ${finalStats.formScore}%, боль ${painLevel}/10`,
       variant: "success",
     });
     navigate("/patient/progress");
   };
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  const trackingChip =
+    stats.positioning === "good"
+      ? { dot: "bg-success", text: "Отслеживание ОК" }
+      : stats.positioning === "low-visibility"
+        ? { dot: "bg-warning", text: "Плохая видимость" }
+        : { dot: "bg-destructive", text: "Не вижу вас" };
 
   return (
     <div className="space-y-5">
@@ -181,11 +231,12 @@ export default function PatientSession() {
         {/* Camera stage */}
         <Card className="overflow-hidden">
           <div className="relative aspect-video w-full bg-sidebar">
-            {/* mirrored video + skeleton overlay */}
+            {/* the video is mirrored; the canvas is NOT — the overlay mirrors
+                points in code so angle labels stay readable */}
             <div className="absolute inset-0 [transform:scaleX(-1)]">
               <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
-              <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
             </div>
+            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
             {/* ready overlay */}
             {phase === "ready" && (
@@ -250,10 +301,24 @@ export default function PatientSession() {
                   <Badge variant="secondary" className="bg-black/40 text-white">
                     <Timer className="h-3 w-3" /> {mmss(elapsed)}
                   </Badge>
-                  <Badge variant="secondary" className="bg-black/40 text-white tabular-nums">
-                    {stats.fps} FPS
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      "bg-black/40 tabular-nums",
+                      stats.fps >= 24 ? "text-white" : stats.fps >= 15 ? "text-warning" : "text-destructive"
+                    )}
+                  >
+                    {stats.fps} FPS{stats.delegate === "CPU" ? " · CPU" : ""}
                   </Badge>
                 </div>
+
+                {/* tracking health chip */}
+                {calibrated && (
+                  <div className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/40 px-3 py-1 text-xs text-white transition-colors">
+                    <span className={cn("h-2 w-2 rounded-full", trackingChip.dot)} />
+                    {trackingChip.text}
+                  </div>
+                )}
 
                 <button
                   onClick={() => setVoiceOn((v) => !v)}
@@ -263,6 +328,11 @@ export default function PatientSession() {
                 >
                   {voiceOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
                 </button>
+
+                {/* live depth gauge — fill the bar to the top for a clean rep */}
+                {calibrated && !isBalance && !isHold && stats.positioning === "good" && (
+                  <DepthGauge pct={stats.depthPct} />
+                )}
 
                 {/* transient per-rep corrective feedback */}
                 {calibrated && feedback && (
@@ -289,15 +359,22 @@ export default function PatientSession() {
           </div>
 
           {phase === "active" && status === "ready" && (
-            <CardContent className="flex items-center justify-between p-4">
-              <div className="text-sm text-muted-foreground">
-                {isBalance
-                  ? `Стабильность ${stats.balanceScore}% · удерживайте равновесие`
-                  : `Стадия: ${stats.stage === "down" ? "вниз" : stats.stage === "up" ? "вверх" : "—"} · угол ${stats.angle}°`}
+            <CardContent className="space-y-3 p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  {isBalance
+                    ? `Стабильность ${stats.balanceScore}% · удерживайте равновесие`
+                    : isHold
+                      ? `Удержание ${mmss(holdSec)} из ${mmss(holdTarget)} · ${stats.holding ? "в позиции ✓" : "займите позицию"}`
+                      : `Стадия: ${stats.stage === "down" ? "вниз" : stats.stage === "up" ? "вверх" : "—"} · угол ${stats.angle}°` +
+                        (stats.avgRepMs != null ? ` · темп ${(stats.avgRepMs / 1000).toFixed(1)} с` : "") +
+                        (stats.symmetry != null ? ` · симметрия ${stats.symmetry}%` : "")}
+                </div>
+                <Button variant="destructive" onClick={stop}>
+                  <Square className="h-4 w-4" /> Завершить
+                </Button>
               </div>
-              <Button variant="destructive" onClick={stop}>
-                <Square className="h-4 w-4" /> Завершить
-              </Button>
+              {!isBalance && !isHold && repHistory.length > 0 && <RepStrip history={repHistory} />}
             </CardContent>
           )}
         </Card>
@@ -308,25 +385,37 @@ export default function PatientSession() {
             <>
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">{isBalance ? "Баланс" : "Цель"}</CardTitle>
+                  <CardTitle className="text-base">
+                    {isBalance ? "Баланс" : isHold ? "Удержание" : "Цель"}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="text-center">
                     <div className="font-heading text-5xl font-bold tabular-nums text-primary">
-                      {isBalance ? `${stats.balanceScore}%` : stats.reps}
+                      {isBalance ? `${stats.balanceScore}%` : isHold ? mmss(holdSec) : stats.reps}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      {isBalance ? `стабильность · ${mmss(elapsed)}` : `из ${goal} повторений`}
+                      {isBalance
+                        ? `стабильность · ${mmss(elapsed)}`
+                        : isHold
+                          ? `из ${mmss(holdTarget)} удержания`
+                          : `из ${goal} повторений`}
                     </div>
                   </div>
-                  {!isBalance && <Progress value={repProgress} indicatorClassName="bg-accent" label="Прогресс повторов" />}
+                  {!isBalance && (
+                    <Progress
+                      value={isHold ? holdProgress : repProgress}
+                      indicatorClassName={isHold && holdProgress >= 100 ? "bg-success" : "bg-accent"}
+                      label={isHold ? "Прогресс удержания" : "Прогресс повторов"}
+                    />
+                  )}
                   <div className="grid grid-cols-2 gap-3 text-center">
                     <div className="rounded-lg bg-muted p-3">
                       <div className="text-xl font-bold tabular-nums">
-                        {isBalance ? mmss(elapsed) : `${targetReps}×${targetSets}`}
+                        {isBalance ? mmss(elapsed) : isHold ? `${holdTarget} с` : `${targetReps}×${targetSets}`}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {isBalance ? "время" : "повт × подходы"}
+                        {isBalance ? "время" : isHold ? "цель" : "повт × подходы"}
                       </div>
                     </div>
                     <div className="rounded-lg bg-muted p-3">
@@ -334,11 +423,11 @@ export default function PatientSession() {
                         {formScore}%
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {isBalance ? "стабильность" : "техника"}
+                        {isBalance ? "стабильность" : isHold ? "эффективность" : "техника"}
                       </div>
                     </div>
                   </div>
-                  {!isBalance && stats.achievedROM > 0 && (
+                  {!isBalance && !isHold && stats.achievedROM > 0 && (
                     <div className="rounded-lg border border-border p-3 text-center">
                       <div className="text-xl font-bold tabular-nums text-primary">{stats.achievedROM}°</div>
                       <div className="text-xs text-muted-foreground">амплитуда (ROM)</div>
@@ -367,6 +456,8 @@ export default function PatientSession() {
               stats={finalStats}
               targetReps={goal}
               isBalance={isBalance}
+              isHold={isHold}
+              holdTarget={holdTarget}
               onRetry={() => {
                 setElapsed(0);
                 setPhase("ready");
@@ -381,11 +472,47 @@ export default function PatientSession() {
   );
 }
 
+/** Vertical live gauge: how deep the current movement is vs the clean-rep target. */
+function DepthGauge({ pct }: { pct: number }) {
+  return (
+    <div
+      aria-hidden
+      className="absolute right-3 top-1/2 h-2/3 w-3 -translate-y-1/2 overflow-hidden rounded-full bg-white/20 backdrop-blur"
+    >
+      <div
+        className={cn(
+          "absolute bottom-0 w-full rounded-full transition-[height] duration-100 ease-linear",
+          pct >= 100 ? "bg-success" : "bg-warning"
+        )}
+        style={{ height: `${Math.min(100, Math.max(0, pct))}%` }}
+      />
+      <div className="absolute top-0 h-0.5 w-full bg-white/80" />
+    </div>
+  );
+}
+
+/** Per-rep quality strip: green = clean, amber = needs correction. */
+function RepStrip({ history }: { history: RepRecord[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1" aria-label="Качество повторов по порядку">
+      {history.map((r, i) => (
+        <span
+          key={i}
+          title={`Повтор ${i + 1}: ${r.peakAngle}°${r.durationSec != null ? `, ${r.durationSec.toFixed(1)} с` : ""}`}
+          className={cn("h-2 w-5 rounded-full", r.good ? "bg-success" : "bg-warning")}
+        />
+      ))}
+    </div>
+  );
+}
+
 function SummaryCard({
   exerciseName,
   stats,
   targetReps,
   isBalance,
+  isHold,
+  holdTarget,
   onRetry,
   onSave,
   mmss,
@@ -394,6 +521,8 @@ function SummaryCard({
   stats: FinalStats;
   targetReps: number;
   isBalance: boolean;
+  isHold: boolean;
+  holdTarget: number;
   onRetry: () => void;
   onSave: (painLevel: number) => void;
   mmss: (s: number) => string;
@@ -412,18 +541,18 @@ function SummaryCard({
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Metric
-            label={isBalance ? "Время" : "Повторений"}
-            value={isBalance ? mmss(stats.duration) : `${stats.reps}/${targetReps}`}
+            label={isBalance ? "Время" : isHold ? "Удержание" : "Повторений"}
+            value={isBalance ? mmss(stats.duration) : isHold ? `${mmss(stats.holdSec)}/${mmss(holdTarget)}` : `${stats.reps}/${targetReps}`}
             icon={Gauge}
           />
           <Metric label="Время" value={mmss(stats.duration)} icon={Timer} />
           <Metric
-            label={isBalance ? "Стабильность" : "Техника"}
+            label={isBalance ? "Стабильность" : isHold ? "Эффективность" : "Техника"}
             value={`${stats.formScore}%`}
             icon={CheckCircle2}
             tone="success"
           />
-          {isBalance ? (
+          {isBalance || isHold ? (
             <Metric label="Амплитуда" value={stats.achievedROM ? `${stats.achievedROM}°` : "—"} icon={Gauge} />
           ) : (
             <Metric
@@ -433,7 +562,25 @@ function SummaryCard({
               tone={stats.violations > 2 ? "warning" : undefined}
             />
           )}
+          {!isBalance && !isHold && stats.avgRepSec != null && (
+            <Metric label="Темп повтора" value={`${stats.avgRepSec.toFixed(1)} с`} icon={Timer} />
+          )}
+          {stats.symmetry != null && (
+            <Metric
+              label="Симметрия"
+              value={`${stats.symmetry}%`}
+              icon={Scale}
+              tone={stats.symmetry >= 85 ? "success" : "warning"}
+            />
+          )}
         </div>
+
+        {!isBalance && !isHold && stats.repHistory.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-xs text-muted-foreground">Повторы по порядку</p>
+            <RepStrip history={stats.repHistory} />
+          </div>
+        )}
 
         {/* mandatory pain capture (NPRS 0-10) */}
         <fieldset>

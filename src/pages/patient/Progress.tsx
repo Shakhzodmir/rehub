@@ -139,6 +139,7 @@ export default function PatientProgress() {
                 <TH>Упражнение</TH>
                 <TH>Повторения</TH>
                 <TH>Техника</TH>
+                <TH>Темп</TH>
                 <TH>Боль</TH>
                 <TH>Ошибки</TH>
               </TR>
@@ -155,6 +156,13 @@ export default function PatientProgress() {
                     <Badge variant={s.formScore >= 85 ? "success" : s.formScore >= 75 ? "warning" : "destructive"}>
                       {s.formScore}%
                     </Badge>
+                  </TD>
+                  <TD className="tabular-nums text-muted-foreground">
+                    {s.avgRepSec != null
+                      ? `${s.avgRepSec.toFixed(1)} с`
+                      : s.holdSec != null
+                        ? `уд. ${s.holdSec} с`
+                        : "—"}
                   </TD>
                   <TD className="tabular-nums text-muted-foreground">{s.painLevel != null ? `${s.painLevel}/10` : "—"}</TD>
                   <TD className="tabular-nums text-muted-foreground">{s.violations}</TD>

@@ -15,7 +15,26 @@ export type ExerciseKey =
   | "jumping-jacks"
   | "lunges"
   | "glute-bridge"
+  | "plank"
   | "heel-toe";
+
+/**
+ * Secondary form check evaluated by the pose engine alongside the depth check.
+ * kind "angle"   — the a-b-c joint angle must stay inside [min, max]
+ * kind "incline" — tilt of the joints[1]→joints[0] segment from vertical (0° = upright)
+ */
+export interface FormRule {
+  id: string;
+  kind: "angle" | "incline";
+  /** angle: [a, b(vertex), c]; incline: [top, bottom] — right-side indices, mirrored with the tracked side */
+  joints: number[];
+  min?: number;
+  max?: number;
+  /** effort = checked only during the effort phase of a rep (default); always = every frame */
+  when?: "effort" | "always";
+  /** corrective cue spoken/shown when the rule is violated on a rep */
+  cue: string;
+}
 
 export interface ExerciseDef {
   key: ExerciseKey;
@@ -24,8 +43,8 @@ export interface ExerciseDef {
   focus: string;
   description: string;
   difficulty: "Лёгкое" | "Среднее" | "Высокое";
-  /** rep = angle-based state machine; balance = posture/time based */
-  mode: "rep" | "balance";
+  /** rep = angle state machine; hold = isometric time-in-zone; balance = posture/time */
+  mode: "rep" | "hold" | "balance";
   /** joints tracked for the rep state-machine */
   joint: [number, number, number]; // [a, b(vertex), c] MediaPipe landmark indices
   /** angle thresholds: down = flexed (low angle), up = extended (high angle) */
@@ -45,6 +64,14 @@ export interface ExerciseDef {
   plane?: "sagittal" | "frontal";
   /** per-rep corrective cue spoken/shown when the effort peak is too shallow */
   shallowCue?: string;
+  /** secondary technique checks (torso lean, hip sag, …) beyond the depth check */
+  formRules?: FormRule[];
+  /** a rep faster than this (ms, effort start → completion) triggers a tempo cue; omit to skip */
+  minTempoMs?: number;
+  /** hold mode: target continuous time in the effort zone, seconds */
+  holdTargetSec?: number;
+  /** auto-pick the better-visible body side (default true for rep/hold) */
+  sideSelect?: boolean;
   cues: string[];
 }
 
@@ -82,6 +109,22 @@ export interface WorkoutSession {
   painLevel?: number;
   /** peak range of motion (degrees) measured during the session */
   achievedROM?: number;
+  /** average rep tempo, seconds per rep (effort start → completion) */
+  avgRepSec?: number;
+  /** left/right movement symmetry 0-100, when both sides were visible */
+  symmetry?: number;
+  /** hold mode: accumulated time in the correct position, seconds */
+  holdSec?: number;
+  /** per-rep quality trace — lets the clinician see technique decay within a set */
+  repHistory?: RepRecord[];
+}
+
+export interface RepRecord {
+  good: boolean;
+  /** effort-extreme angle of the rep, degrees */
+  peakAngle: number;
+  /** effort start → completion, seconds */
+  durationSec?: number;
 }
 
 export interface Patient {
