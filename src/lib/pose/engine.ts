@@ -144,6 +144,10 @@ export class ExerciseEngine {
 
   private lastAngle = 0;
   private events: EngineEvent[] = [];
+  // width/height of the source frame. Normalized landmark coords are
+  // anisotropic (x spans width, y spans height), which skews 2D angles by up
+  // to ~10° at 16:9 — scaling x by the aspect restores true geometry.
+  private aspect = 1;
 
   constructor(def: ExerciseDef, opts: EngineOptions = {}) {
     this.def = def;
@@ -172,6 +176,34 @@ export class ExerciseEngine {
     return out;
   }
 
+  /** Source frame aspect ratio (width/height); call once the video size is known. */
+  setAspect(aspect: number) {
+    if (Number.isFinite(aspect) && aspect > 0) this.aspect = aspect;
+  }
+
+  /**
+   * External discontinuity (hidden tab, model swap, camera change): abandon the
+   * in-flight rep and demand a fresh rest → effort → rest cycle before counting.
+   */
+  resetCycle() {
+    this.cycle = "unknown";
+    this.stage = "unknown";
+    this.peak = this.effortIsFlex ? 180 : 0;
+    this.effortStartTs = null;
+    this.effortZoneMs = 0;
+    this.holding = false;
+    this.filter.reset();
+  }
+
+  /** x scaled by the frame aspect so 2D angles are measured in true geometry. */
+  private scaled(p: Point): Point {
+    return this.aspect === 1 ? p : { x: p.x * this.aspect, y: p.y, z: p.z, visibility: p.visibility };
+  }
+
+  private angle2D(a: Point, b: Point, c: Point): number {
+    return calculateAngle(this.scaled(a), this.scaled(b), this.scaled(c));
+  }
+
   /** Analyze one video frame. `wl` = world landmarks (metric 3D), if available. */
   step(lm: Point[] | null | undefined, wl: Point[] | null | undefined, t: number): EngineSnapshot {
     const dt = this.lastStepTs === null ? 0 : Math.min(Math.max(t - this.lastStepTs, 0), MAX_STEP_MS);
@@ -194,9 +226,13 @@ export class ExerciseEngine {
     }
     this.lastVisibleTs = t;
 
-    // 3D world angle for frontal-plane moves (resists foreshortening), else 2D
+    // 3D world angle for frontal-plane moves (resists foreshortening), else
+    // aspect-corrected 2D
     const src = this.use3D && wl ? wl : lm;
-    const raw = calculateAngle(src[ai], src[bi], src[ci], this.use3D);
+    const raw =
+      this.use3D && wl
+        ? calculateAngle(src[ai], src[bi], src[ci], true)
+        : this.angle2D(src[ai], src[bi], src[ci]);
     const angle = this.filter.filter(raw, t);
     this.lastAngle = angle;
 
@@ -225,12 +261,7 @@ export class ExerciseEngine {
       t - this.lastVisibleTs > OCCLUSION_RESET_MS &&
       this.cycle !== "unknown"
     ) {
-      this.cycle = "unknown";
-      this.stage = "unknown";
-      this.peak = this.effortIsFlex ? 180 : 0;
-      this.effortStartTs = null;
-      this.effortZoneMs = 0;
-      this.filter.reset();
+      this.resetCycle();
     }
   }
 
@@ -277,7 +308,9 @@ export class ExerciseEngine {
       jointVisible(src[oa], src[ob], src[oc]) &&
       jointVisible(src[active[0]], src[active[1]], src[active[2]]);
     if (!bothVisible) return; // keep the last estimate; UI shows it as-is
-    const otherAngle = calculateAngle(src[oa], src[ob], src[oc], this.use3D);
+    const otherAngle = this.use3D
+      ? calculateAngle(src[oa], src[ob], src[oc], true)
+      : this.angle2D(src[oa], src[ob], src[oc]);
     const asym = Math.abs(rawActive - otherAngle);
     this.asymEma = this.asymEma === null ? asym : this.asymEma * 0.8 + asym * 0.2;
   }
@@ -388,15 +421,15 @@ export class ExerciseEngine {
   }
 
   private ruleValue(rule: FormRule, lm: Point[]): number | null {
-    const joints = this.side === "right" ? rule.joints : mirrorJoints([...rule.joints]);
+    const joints = this.side === "right" ? rule.joints : mirrorJoints(rule.joints);
     if (rule.kind === "incline") {
       const [top, bottom] = joints;
       if (!jointVisible(lm[top], lm[bottom], lm[bottom])) return null;
-      return inclineFromVertical(lm[top], lm[bottom]);
+      return inclineFromVertical(this.scaled(lm[top]), this.scaled(lm[bottom]));
     }
     const [a, b, c] = joints;
     if (!jointVisible(lm[a], lm[b], lm[c])) return null;
-    return calculateAngle(lm[a], lm[b], lm[c]);
+    return this.angle2D(lm[a], lm[b], lm[c]);
   }
 
   // ---- hold mode -----------------------------------------------------------
@@ -429,7 +462,7 @@ export class ExerciseEngine {
     if (!jointVisible(lh, rh, lm[this.def.joint[1]])) {
       return this.snapshot("low-visibility", 0);
     }
-    const midX = ((lh?.x ?? 0) + (rh?.x ?? 0)) / 2;
+    const midX = (((lh?.x ?? 0) + (rh?.x ?? 0)) / 2) * this.aspect;
     this.swayMean = this.swayMean === null ? midX : this.swayMean * 0.95 + midX * 0.05;
     const dev = Math.abs(midX - this.swayMean);
     this.sway = this.sway * 0.9 + dev * 0.1;
@@ -438,7 +471,7 @@ export class ExerciseEngine {
     const rs = lm[12];
     const torso =
       jointVisible(ls, rs, lh)
-        ? Math.hypot((ls.x + rs.x) / 2 - midX, (ls.y + rs.y) / 2 - (lh.y + rh.y) / 2)
+        ? Math.hypot(((ls.x + rs.x) / 2) * this.aspect - midX, (ls.y + rs.y) / 2 - (lh.y + rh.y) / 2)
         : null;
     const swayNorm = torso && torso > 0.05 ? this.sway / torso : this.sway * 3; // 3 ≈ 1/typical torso
     this.balance = Math.max(0, Math.min(100, Math.round(100 - swayNorm * 500)));

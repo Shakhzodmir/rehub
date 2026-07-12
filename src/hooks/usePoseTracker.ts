@@ -16,8 +16,13 @@ import { LandmarkSmoother } from "@/lib/pose/oneEuro";
 
 const WASM_PATH =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
-const MODEL_PATH =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+// full is noticeably more accurate (esp. z / world landmarks); lite is the
+// fallback for CPU delegates and devices where full can't hold real-time
+const MODELS = {
+  full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+} as const;
+export type ModelKind = keyof typeof MODELS;
 
 // don't repeat the same spoken cue more often than this
 const SPEAK_COOLDOWN_MS = 1500;
@@ -27,6 +32,16 @@ const STATS_PUSH_MS = 100;
 const REINIT_ERR_STREAK = 5;
 // … and this many gives up with a visible error
 const FATAL_ERR_STREAK = 60;
+// after this warm-up, downgrade full → lite if inference can't hold real time
+const DOWNGRADE_WARMUP_FRAMES = 90;
+const DOWNGRADE_INFERENCE_MS = 45;
+// a tab hidden longer than this may hide a pose change — restart the rep cycle
+const HIDDEN_RESET_MS = 2000;
+
+type VideoWithVFC = HTMLVideoElement & {
+  requestVideoFrameCallback?: (cb: () => void) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+};
 
 export type { Stage, Positioning };
 
@@ -49,6 +64,8 @@ export interface PoseStats extends EngineSnapshot {
   inferenceMs: number;
   /** which compute delegate is running — surfaces GPU fallbacks for remote diagnosis */
   delegate: Delegate;
+  /** which landmarker model is running (full = more accurate, lite = fallback) */
+  model: ModelKind;
 }
 
 interface Options {
@@ -84,6 +101,7 @@ const INITIAL: PoseStats = {
   fps: 0,
   inferenceMs: 0,
   delegate: "GPU",
+  model: "full",
 };
 
 const ZONE_DEEP = "#10B981"; // effort target reached
@@ -132,17 +150,22 @@ export function usePoseTracker({
     const smoother = new LandmarkSmoother();
     let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
     let delegate: Delegate = "GPU";
+    let model: ModelKind = "full";
 
     // timing / telemetry
     let lastDetectTs = 0;
     let dtEma: number | null = null;
     let detEma: number | null = null;
     let lastFrameTs = performance.now();
+    let frameCount = 0;
+    let vfcHandle: number | null = null;
+    let hiddenAt = 0;
 
     // failure handling
     let errStreak = 0;
     let reinitStarted = false;
     let reinitInFlight = false;
+    let downgradeTried = false;
 
     // render throttling
     let lastPushTs = 0;
@@ -162,9 +185,9 @@ export function usePoseTracker({
       synth.speak(u);
     }
 
-    function createLandmarker(d: Delegate) {
+    function createLandmarker(d: Delegate, m: ModelKind) {
       return PoseLandmarker.createFromOptions(vision!, {
-        baseOptions: { modelAssetPath: MODEL_PATH, delegate: d },
+        baseOptions: { modelAssetPath: MODELS[m], delegate: d },
         runningMode: "VIDEO",
         numPoses: 1,
         minPoseDetectionConfidence: 0.6,
@@ -172,6 +195,18 @@ export function usePoseTracker({
         minTrackingConfidence: 0.6,
         outputSegmentationMasks: false,
       });
+    }
+
+    // schedule the next analysis pass: rVFC fires exactly once per delivered
+    // camera frame (no wasted iterations on 120 Hz displays); rAF is the fallback
+    function schedule() {
+      if (cancelled || stopped) return;
+      const video = videoRef.current as VideoWithVFC | null;
+      if (video?.requestVideoFrameCallback) {
+        vfcHandle = video.requestVideoFrameCallback(() => loop());
+      } else {
+        rafRef.current = requestAnimationFrame(loop);
+      }
     }
 
     async function setup() {
@@ -182,18 +217,32 @@ export function usePoseTracker({
 
         vision = await FilesetResolver.forVisionTasks(WASM_PATH);
         if (cancelled) return;
-        // some devices lose or lack a usable GPU context — fall back to CPU
+        // accuracy-first cascade: full model on GPU; if the full model or the
+        // GPU context fails, degrade one step at a time down to CPU + lite
         try {
-          landmarkerRef.current = await createLandmarker("GPU");
-        } catch (e) {
-          console.warn("GPU delegate failed, falling back to CPU", e);
-          delegate = "CPU";
-          landmarkerRef.current = await createLandmarker("CPU");
+          landmarkerRef.current = await createLandmarker("GPU", "full");
+        } catch (eFull) {
+          console.warn("GPU+full failed, trying GPU+lite", eFull);
+          model = "lite";
+          try {
+            landmarkerRef.current = await createLandmarker("GPU", "lite");
+          } catch (eLite) {
+            console.warn("GPU delegate failed, falling back to CPU", eLite);
+            delegate = "CPU";
+            landmarkerRef.current = await createLandmarker("CPU", "lite");
+          }
         }
         if (cancelled) return;
 
+        // ask for 1080p — browsers pick the closest supported mode; a low-res
+        // stream stretched over the stage is what reads as a "blurry camera"
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, facingMode: "user" },
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 },
+            facingMode: "user",
+          },
           audio: false,
         });
         if (cancelled) {
@@ -214,6 +263,8 @@ export function usePoseTracker({
         if (!video) return;
         video.srcObject = stream;
         await video.play();
+        if (video.videoHeight > 0) engine.setAspect(video.videoWidth / video.videoHeight);
+        document.addEventListener("visibilitychange", onVisibility);
         setStatus("ready");
         loop();
       } catch (e) {
@@ -228,12 +279,23 @@ export function usePoseTracker({
       }
     }
 
+    // a tab hidden for a while can conceal a pose change — demand a fresh
+    // rest → effort cycle instead of completing a stale rep on return
+    function onVisibility() {
+      if (document.hidden) {
+        hiddenAt = performance.now();
+      } else if (performance.now() - hiddenAt > HIDDEN_RESET_MS) {
+        engine.resetCycle();
+        smoother.reset();
+      }
+    }
+
     // one-shot recovery: recreate the landmarker on CPU after repeated failures
     // (typical cause — a lost WebGL context mid-session)
     async function reinitLandmarker() {
       reinitInFlight = true;
       try {
-        const next = await createLandmarker("CPU");
+        const next = await createLandmarker("CPU", "lite");
         if (cancelled) {
           next.close();
           return;
@@ -241,6 +303,7 @@ export function usePoseTracker({
         landmarkerRef.current?.close();
         landmarkerRef.current = next;
         delegate = "CPU";
+        model = "lite";
         errStreak = 0;
         smoother.reset();
       } catch (e) {
@@ -255,13 +318,36 @@ export function usePoseTracker({
       }
     }
 
+    // the full model can't hold real time on this device — swap to lite without
+    // losing session state (reps stay; the engine just restarts its cycle)
+    async function downgradeModel() {
+      reinitInFlight = true;
+      try {
+        const next = await createLandmarker(delegate, "lite");
+        if (cancelled) {
+          next.close();
+          return;
+        }
+        landmarkerRef.current?.close();
+        landmarkerRef.current = next;
+        model = "lite";
+        detEma = null; // re-measure latency for the new model
+        smoother.reset();
+        engine.resetCycle();
+      } catch (e) {
+        console.warn("model downgrade failed, keeping full", e);
+      } finally {
+        reinitInFlight = false;
+      }
+    }
+
     function loop() {
       if (cancelled || stopped) return;
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const landmarker = landmarkerRef.current;
       if (!video || !canvas || !landmarker) {
-        rafRef.current = requestAnimationFrame(loop);
+        schedule();
         return;
       }
 
@@ -278,12 +364,13 @@ export function usePoseTracker({
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
+          engine.setAspect(video.videoWidth / video.videoHeight);
           ctxRef.current = canvas.getContext("2d");
           drawRef.current = ctxRef.current ? new DrawingUtils(ctxRef.current) : null;
         }
         const ctx = ctxRef.current;
         if (!ctx) {
-          rafRef.current = requestAnimationFrame(loop);
+          schedule();
           return;
         }
 
@@ -298,6 +385,7 @@ export function usePoseTracker({
           const det = performance.now() - t0;
           detEma = detEma === null ? det : detEma * 0.9 + det * 0.1;
           errStreak = 0;
+          frameCount += 1;
         } catch (e) {
           errStreak += 1;
           if (errStreak === 1) console.error("detectForVideo failed", e);
@@ -311,8 +399,21 @@ export function usePoseTracker({
             setError("Сбой анализа позы. Нажмите «Повторить».");
             return;
           }
-          rafRef.current = requestAnimationFrame(loop);
+          schedule();
           return;
+        }
+
+        // after warm-up (shaders compiled, caches hot) check that the full
+        // model holds real time on this device; otherwise drop to lite once
+        if (
+          model === "full" &&
+          !downgradeTried &&
+          frameCount > DOWNGRADE_WARMUP_FRAMES &&
+          detEma !== null &&
+          detEma > DOWNGRADE_INFERENCE_MS
+        ) {
+          downgradeTried = true;
+          void downgradeModel();
         }
 
         const dt = ts - lastFrameTs;
@@ -357,7 +458,7 @@ export function usePoseTracker({
 
         pushStats(snap, ts);
       }
-      rafRef.current = requestAnimationFrame(loop);
+      schedule();
     }
 
     function drawOverlay(
@@ -474,6 +575,7 @@ export function usePoseTracker({
         fps: dtEma ? Math.round(1000 / dtEma) : 0,
         inferenceMs: detEma ? Math.round(detEma) : 0,
         delegate,
+        model,
       });
     }
 
@@ -482,6 +584,10 @@ export function usePoseTracker({
     return () => {
       cancelled = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (vfcHandle !== null) {
+        (videoRef.current as VideoWithVFC | null)?.cancelVideoFrameCallback?.(vfcHandle);
+      }
+      document.removeEventListener("visibilitychange", onVisibility);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       landmarkerRef.current?.close();

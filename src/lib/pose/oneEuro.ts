@@ -84,9 +84,10 @@ export class LandmarkSmoother {
 
   smooth<T extends SmoothablePoint>(landmarks: T[], timestampMs: number): T[] {
     while (this.filters.length < landmarks.length) {
+      // high beta: kill jitter at rest but track fast limbs with no visible trail
       this.filters.push({
-        x: new OneEuroFilter(1.5, 0.5),
-        y: new OneEuroFilter(1.5, 0.5),
+        x: new OneEuroFilter(1.5, 1.0),
+        y: new OneEuroFilter(1.5, 1.0),
       });
     }
     return landmarks.map((p, i) => ({

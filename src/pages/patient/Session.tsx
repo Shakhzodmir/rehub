@@ -232,11 +232,13 @@ export default function PatientSession() {
         <Card className="overflow-hidden">
           <div className="relative aspect-video w-full bg-sidebar">
             {/* the video is mirrored; the canvas is NOT — the overlay mirrors
-                points in code so angle labels stay readable */}
+                points in code so angle labels stay readable. Both use
+                object-cover so the skeleton lands exactly on the body even
+                when the camera delivers a non-16:9 stream. */}
             <div className="absolute inset-0 [transform:scaleX(-1)]">
               <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
             </div>
-            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full object-cover" />
 
             {/* ready overlay */}
             {phase === "ready" && (

@@ -301,6 +301,30 @@ describe("hold mode", () => {
   });
 });
 
+describe("aspect correction", () => {
+  it("measures the same angle regardless of frame aspect for axis-aligned limbs", () => {
+    // vertical thigh + vertical shin: aspect scaling of x must not change 180°
+    const a = new ExerciseEngine(squatDef());
+    a.setAspect(16 / 9);
+    const { last } = run(a, [{ angle: 180, frames: 15 }]);
+    expect(last.angle).toBeGreaterThan(176);
+  });
+
+  it("corrects oblique angles that normalized coords would distort", () => {
+    // synthetic 135° in square space reads shallower once x is stretched 2×:
+    // vectors (sin135°·2, cos135°) vs (0, 1) → ≈117°, not 135°
+    const wide = new ExerciseEngine(squatDef());
+    wide.setAspect(2);
+    const wideRun = run(wide, [{ angle: 135, frames: 20 }]);
+
+    const square = new ExerciseEngine(squatDef());
+    const squareRun = run(square, [{ angle: 135, frames: 20 }]);
+
+    expect(squareRun.last.angle).toBeCloseTo(135, 0);
+    expect(wideRun.last.angle).toBeCloseTo(117, 0);
+  });
+});
+
 describe("depth gauge", () => {
   it("grows toward 100 as the movement deepens", () => {
     const engine = new ExerciseEngine(squatDef());
