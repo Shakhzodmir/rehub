@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  DrawingUtils,
   FilesetResolver,
   PoseLandmarker,
   type NormalizedLandmark,
@@ -32,9 +31,11 @@ const STATS_PUSH_MS = 100;
 const REINIT_ERR_STREAK = 5;
 // … and this many gives up with a visible error
 const FATAL_ERR_STREAK = 60;
-// after this warm-up, downgrade full → lite if inference can't hold real time
+// after this warm-up, downgrade full → lite if inference can't hold real time:
+// >33 ms inference or <15 fps loop means the skeleton visibly trails the body
 const DOWNGRADE_WARMUP_FRAMES = 90;
-const DOWNGRADE_INFERENCE_MS = 45;
+const DOWNGRADE_INFERENCE_MS = 33;
+const DOWNGRADE_FRAME_MS = 66;
 // a tab hidden longer than this may hide a pose change — restart the rep cycle
 const HIDDEN_RESET_MS = 2000;
 
@@ -42,6 +43,23 @@ type VideoWithVFC = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: () => void) => number;
   cancelVideoFrameCallback?: (handle: number) => void;
 };
+
+// Body-only skeleton (no face mesh, no finger joints). MediaPipe hallucinates
+// plausible positions for occluded landmarks; drawing every connection makes
+// those guesses show up as wild lines. Segments render only when BOTH
+// endpoints are confidently visible.
+const BODY_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
+  [11, 12], // shoulders
+  [11, 13], [13, 15], // left arm
+  [12, 14], [14, 16], // right arm
+  [11, 23], [12, 24], [23, 24], // torso
+  [23, 25], [25, 27], // left leg
+  [24, 26], [26, 28], // right leg
+  [27, 29], [29, 31], [27, 31], // left foot
+  [28, 30], [30, 32], [28, 32], // right foot
+];
+const BODY_POINTS = Array.from({ length: 22 }, (_, i) => i + 11); // 11..32
+const MIN_DRAW_VISIBILITY = 0.5;
 
 export type { Stage, Positioning };
 
@@ -125,7 +143,6 @@ export function usePoseTracker({
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const drawRef = useRef<DrawingUtils | null>(null);
   const lastVideoTimeRef = useRef(-1);
 
   // voice (kept in a ref so toggling it never restarts the camera/model)
@@ -240,6 +257,7 @@ export function usePoseTracker({
           video: {
             width: { ideal: 1920 },
             height: { ideal: 1080 },
+            aspectRatio: { ideal: 16 / 9 }, // avoid soft 4:3 modes when a 16:9 one exists
             frameRate: { ideal: 30 },
             facingMode: "user",
           },
@@ -366,7 +384,6 @@ export function usePoseTracker({
           canvas.height = video.videoHeight;
           engine.setAspect(video.videoWidth / video.videoHeight);
           ctxRef.current = canvas.getContext("2d");
-          drawRef.current = ctxRef.current ? new DrawingUtils(ctxRef.current) : null;
         }
         const ctx = ctxRef.current;
         if (!ctx) {
@@ -409,8 +426,8 @@ export function usePoseTracker({
           model === "full" &&
           !downgradeTried &&
           frameCount > DOWNGRADE_WARMUP_FRAMES &&
-          detEma !== null &&
-          detEma > DOWNGRADE_INFERENCE_MS
+          ((detEma !== null && detEma > DOWNGRADE_INFERENCE_MS) ||
+            (dtEma !== null && dtEma > DOWNGRADE_FRAME_MS))
         ) {
           downgradeTried = true;
           void downgradeModel();
@@ -467,20 +484,29 @@ export function usePoseTracker({
       lm: NormalizedLandmark[],
       snap: EngineSnapshot
     ) {
-      const utils = drawRef.current;
-      if (!utils) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      const visible = (i: number) => (lm[i]?.visibility ?? 0) >= MIN_DRAW_VISIBILITY;
 
-      // full skeleton, muted — background context
-      utils.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, {
-        color: "rgba(8,145,178,0.35)",
-        lineWidth: 3,
-      });
-      utils.drawLandmarks(lm, {
-        radius: (d) => DrawingUtils.lerp(d.from?.z ?? 0, -0.15, 0.1, 4, 2),
-        color: "rgba(34,211,238,0.6)",
-        fillColor: "rgba(34,211,238,0.6)",
-        lineWidth: 1,
-      });
+      // body skeleton, muted — only confidently visible segments, so occluded
+      // joints never paint hallucinated lines across the frame
+      ctx.strokeStyle = "rgba(34,211,238,0.5)";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      for (const [i, j] of BODY_CONNECTIONS) {
+        if (!visible(i) || !visible(j)) continue;
+        ctx.moveTo(lm[i].x * w, lm[i].y * h);
+        ctx.lineTo(lm[j].x * w, lm[j].y * h);
+      }
+      ctx.stroke();
+      ctx.fillStyle = "rgba(34,211,238,0.7)";
+      for (const i of BODY_POINTS) {
+        if (!visible(i)) continue;
+        ctx.beginPath();
+        ctx.arc(lm[i].x * w, lm[i].y * h, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       if (exercise.mode === "balance" || snap.positioning !== "good") return;
 
@@ -490,8 +516,6 @@ export function usePoseTracker({
       const c = lm[ci];
       if (!a || !b || !c) return;
 
-      const w = canvas.width;
-      const h = canvas.height;
       const ax = a.x * w, ay = a.y * h;
       const bx = b.x * w, by = b.y * h;
       const cx = c.x * w, cy = c.y * h;
@@ -593,7 +617,6 @@ export function usePoseTracker({
       landmarkerRef.current?.close();
       landmarkerRef.current = null;
       ctxRef.current = null;
-      drawRef.current = null;
       lastVideoTimeRef.current = -1;
       if (typeof window !== "undefined") window.speechSynthesis?.cancel();
     };

@@ -7,6 +7,8 @@ import {
   CheckCircle2,
   Gauge,
   Loader2,
+  Maximize,
+  Minimize,
   RotateCcw,
   Save,
   Scale,
@@ -82,8 +84,28 @@ export default function PatientSession() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const startRef = useRef(0);
   const feedbackTimer = useRef<number | undefined>(undefined);
+
+  // fullscreen stage (native API where available, CSS fallback otherwise)
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+  const toggleFullscreen = () => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else if (el.requestFullscreen) {
+      void el.requestFullscreen();
+    } else {
+      setIsFullscreen((v) => !v); // iOS Safari: pseudo-fullscreen via CSS
+    }
+  };
 
   const onRep = useCallback((e: RepEvent) => {
     if (e.good) {
@@ -163,6 +185,8 @@ export default function PatientSession() {
   }
 
   const stop = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    setIsFullscreen(false);
     setFinalStats({
       reps: stats.reps,
       good: stats.goodReps,
@@ -208,13 +232,6 @@ export default function PatientSession() {
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
-  const trackingChip =
-    stats.positioning === "good"
-      ? { dot: "bg-success", text: "Отслеживание ОК" }
-      : stats.positioning === "low-visibility"
-        ? { dot: "bg-warning", text: "Плохая видимость" }
-        : { dot: "bg-destructive", text: "Не вижу вас" };
-
   return (
     <div className="space-y-5">
       <p className="sr-only" aria-live="polite">
@@ -230,7 +247,13 @@ export default function PatientSession() {
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         {/* Camera stage */}
         <Card className="overflow-hidden">
-          <div className="relative aspect-video w-full bg-sidebar">
+          <div
+            ref={stageRef}
+            className={cn(
+              "relative w-full bg-sidebar",
+              isFullscreen ? "fixed inset-0 z-50 h-full" : "aspect-video"
+            )}
+          >
             {/* the video is mirrored; the canvas is NOT — the overlay mirrors
                 points in code so angle labels stay readable. Both use
                 object-cover so the skeleton lands exactly on the body even
@@ -293,43 +316,59 @@ export default function PatientSession() {
               </div>
             )}
 
-            {/* live HUD */}
+            {/* live HUD — deliberately minimal: timer, controls, and warnings only */}
             {phase === "active" && status === "ready" && (
               <>
                 <div className="absolute left-3 top-3 flex items-center gap-2">
-                  <Badge variant="destructive" className="gap-1.5 bg-destructive text-white">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-white" /> REC
-                  </Badge>
                   <Badge variant="secondary" className="bg-black/40 text-white">
                     <Timer className="h-3 w-3" /> {mmss(elapsed)}
                   </Badge>
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      "bg-black/40 tabular-nums",
-                      stats.fps >= 24 ? "text-white" : stats.fps >= 15 ? "text-warning" : "text-destructive"
-                    )}
-                  >
-                    {stats.fps} FPS{stats.delegate === "CPU" ? " · CPU" : ""}
-                  </Badge>
+                  {/* performance warning appears only when tracking degrades */}
+                  {stats.fps > 0 && stats.fps < 20 && (
+                    <Badge variant="secondary" className="bg-black/40 tabular-nums text-warning">
+                      {stats.fps} FPS{stats.delegate === "CPU" ? " · CPU" : ""}
+                    </Badge>
+                  )}
                 </div>
 
-                {/* tracking health chip */}
-                {calibrated && (
-                  <div className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/40 px-3 py-1 text-xs text-white transition-colors">
-                    <span className={cn("h-2 w-2 rounded-full", trackingChip.dot)} />
-                    {trackingChip.text}
+                <div className="absolute right-3 top-3 flex items-center gap-2">
+                  <button
+                    onClick={() => setVoiceOn((v) => !v)}
+                    aria-label={voiceOn ? "Выключить голосовые подсказки" : "Включить голосовые подсказки"}
+                    aria-pressed={voiceOn}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    {voiceOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+                  </button>
+                  <button
+                    onClick={toggleFullscreen}
+                    aria-label={isFullscreen ? "Выйти из полноэкранного режима" : "На весь экран"}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+                  </button>
+                </div>
+
+                {/* fullscreen: the side panel is hidden, so surface the count here */}
+                {isFullscreen && calibrated && (
+                  <div className="absolute bottom-5 left-5 right-5 flex items-end justify-between gap-4">
+                    <div className="text-white drop-shadow">
+                      <div className="font-heading text-6xl font-bold tabular-nums">
+                        {isBalance ? `${stats.balanceScore}%` : isHold ? mmss(holdSec) : stats.reps}
+                      </div>
+                      <div className="text-sm text-white/75">
+                        {isBalance
+                          ? "стабильность"
+                          : isHold
+                            ? `из ${mmss(holdTarget)} удержания`
+                            : `из ${goal} повторений · техника ${formScore}%`}
+                      </div>
+                    </div>
+                    <Button variant="destructive" onClick={stop}>
+                      <Square className="h-4 w-4" /> Завершить
+                    </Button>
                   </div>
                 )}
-
-                <button
-                  onClick={() => setVoiceOn((v) => !v)}
-                  aria-label={voiceOn ? "Выключить голосовые подсказки" : "Включить голосовые подсказки"}
-                  aria-pressed={voiceOn}
-                  className="absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                >
-                  {voiceOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
-                </button>
 
                 {/* live depth gauge — fill the bar to the top for a clean rep */}
                 {calibrated && !isBalance && !isHold && stats.positioning === "good" && (
@@ -340,7 +379,8 @@ export default function PatientSession() {
                 {calibrated && feedback && (
                   <div
                     className={cn(
-                      "absolute inset-x-0 bottom-14 mx-auto w-fit rounded-full px-4 py-1.5 text-sm font-semibold shadow-lg",
+                      "absolute inset-x-0 mx-auto w-fit rounded-full px-4 py-1.5 text-sm font-semibold shadow-lg",
+                      isFullscreen ? "bottom-36" : "bottom-14",
                       feedback.good ? "bg-success text-white" : "bg-warning text-[hsl(var(--warning-foreground))]"
                     )}
                   >
@@ -350,7 +390,12 @@ export default function PatientSession() {
                 )}
 
                 {calibrated && stats.positioning !== "good" && (
-                  <div className="absolute inset-x-0 bottom-3 mx-auto w-fit rounded-full bg-warning px-4 py-1.5 text-sm font-medium text-[hsl(var(--warning-foreground))]">
+                  <div
+                    className={cn(
+                      "absolute inset-x-0 mx-auto w-fit rounded-full bg-warning px-4 py-1.5 text-sm font-medium text-[hsl(var(--warning-foreground))]",
+                      isFullscreen ? "bottom-28" : "bottom-3"
+                    )}
+                  >
                     {stats.positioning === "no-pose"
                       ? "Не вижу вас — встаньте в кадр"
                       : "Плохая видимость суставов — отойдите дальше"}

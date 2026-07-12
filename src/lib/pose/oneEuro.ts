@@ -84,10 +84,11 @@ export class LandmarkSmoother {
 
   smooth<T extends SmoothablePoint>(landmarks: T[], timestampMs: number): T[] {
     while (this.filters.length < landmarks.length) {
-      // high beta: kill jitter at rest but track fast limbs with no visible trail
+      // high cutoff + high beta: kill jitter at rest, zero visible trail on
+      // fast limbs (the full model is natively less noisy, so smoothing is light)
       this.filters.push({
-        x: new OneEuroFilter(1.5, 1.0),
-        y: new OneEuroFilter(1.5, 1.0),
+        x: new OneEuroFilter(2.0, 1.0),
+        y: new OneEuroFilter(2.0, 1.0),
       });
     }
     return landmarks.map((p, i) => ({
