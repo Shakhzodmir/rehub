@@ -75,7 +75,21 @@ export default function PatientSession() {
 
   const [phase, setPhase] = useState<Phase>("ready");
   const [elapsed, setElapsed] = useState(0);
-  const [voiceOn, setVoiceOn] = useState(false);
+  // voice coaching is on by default; the choice persists across sessions
+  const [voiceOn, setVoiceOn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("posetrack.voice") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("posetrack.voice", voiceOn ? "1" : "0");
+    } catch {
+      /* private mode — non-fatal */
+    }
+  }, [voiceOn]);
   const [calibrated, setCalibrated] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; good: boolean } | null>(null);
   const [live, setLive] = useState("");
@@ -156,6 +170,21 @@ export default function PatientSession() {
   }, [phase, status, stats.positioning]);
 
   useEffect(() => () => window.clearTimeout(feedbackTimer.current), []);
+
+  // announce tracking loss to screen readers, debounced so flicker stays quiet
+  useEffect(() => {
+    if (phase !== "active" || !calibrated || stats.positioning === "good") return;
+    const id = window.setTimeout(
+      () =>
+        setLive(
+          stats.positioning === "no-pose"
+            ? "Вы вышли из кадра — встаньте перед камерой"
+            : "Плохая видимость суставов — отойдите дальше"
+        ),
+      1500
+    );
+    return () => window.clearTimeout(id);
+  }, [phase, calibrated, stats.positioning]);
 
   const holdSec = Math.floor(stats.holdMs / 1000);
 
@@ -276,7 +305,25 @@ export default function PatientSession() {
                     браузере — видео никуда не отправляется.
                   </p>
                 </div>
-                <Button size="xl" onClick={() => setPhase("active")}>
+                <Button
+                  size="xl"
+                  onClick={() => {
+                    // unlock speech synthesis inside the user gesture —
+                    // mobile browsers refuse TTS started outside one
+                    try {
+                      const synth = window.speechSynthesis;
+                      if (synth) {
+                        synth.resume();
+                        const u = new SpeechSynthesisUtterance(" ");
+                        u.volume = 0;
+                        synth.speak(u);
+                      }
+                    } catch {
+                      /* speech unsupported — visual feedback still works */
+                    }
+                    setPhase("active");
+                  }}
+                >
                   <Camera className="h-4 w-4" /> Включить камеру
                 </Button>
               </div>
@@ -305,7 +352,7 @@ export default function PatientSession() {
             {/* calibration gate — until the patient is first well-framed */}
             {phase === "active" && status === "ready" && !calibrated && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-sidebar/75 p-6 text-center text-white">
-                <ScanLine className="h-10 w-10 animate-pulse text-sidebar-accent" />
+                <ScanLine className="h-10 w-10 animate-pulse text-sidebar-accent motion-reduce:animate-none" />
                 <div>
                   <h3 className="font-heading text-lg font-bold">Калибровка</h3>
                   <p className="mt-1 max-w-xs text-sm text-sidebar-foreground">
@@ -319,13 +366,13 @@ export default function PatientSession() {
             {/* live HUD — deliberately minimal: timer, controls, and warnings only */}
             {phase === "active" && status === "ready" && (
               <>
-                <div className="absolute left-3 top-3 flex items-center gap-2">
-                  <Badge variant="secondary" className="bg-black/40 text-white">
+                <div className="absolute left-3 top-3 flex select-none items-center gap-2">
+                  <Badge variant="secondary" className="bg-black/55 tabular-nums text-white">
                     <Timer className="h-3 w-3" /> {mmss(elapsed)}
                   </Badge>
                   {/* performance warning appears only when tracking degrades */}
                   {stats.fps > 0 && stats.fps < 20 && (
-                    <Badge variant="secondary" className="bg-black/40 tabular-nums text-warning">
+                    <Badge variant="secondary" className="bg-black/55 tabular-nums text-warning">
                       {stats.fps} FPS{stats.delegate === "CPU" ? " · CPU" : ""}
                     </Badge>
                   )}
@@ -336,14 +383,14 @@ export default function PatientSession() {
                     onClick={() => setVoiceOn((v) => !v)}
                     aria-label={voiceOn ? "Выключить голосовые подсказки" : "Включить голосовые подсказки"}
                     aria-pressed={voiceOn}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    className="inline-flex h-11 w-11 cursor-pointer touch-manipulation items-center justify-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white active:scale-95 motion-reduce:transition-none"
                   >
                     {voiceOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
                   </button>
                   <button
                     onClick={toggleFullscreen}
                     aria-label={isFullscreen ? "Выйти из полноэкранного режима" : "На весь экран"}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    className="inline-flex h-11 w-11 cursor-pointer touch-manipulation items-center justify-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white active:scale-95 motion-reduce:transition-none"
                   >
                     {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
                   </button>
@@ -356,7 +403,7 @@ export default function PatientSession() {
                       <div className="font-heading text-6xl font-bold tabular-nums">
                         {isBalance ? `${stats.balanceScore}%` : isHold ? mmss(holdSec) : stats.reps}
                       </div>
-                      <div className="text-sm text-white/75">
+                      <div className="text-sm text-white/85">
                         {isBalance
                           ? "стабильность"
                           : isHold
@@ -528,7 +575,7 @@ function DepthGauge({ pct }: { pct: number }) {
     >
       <div
         className={cn(
-          "absolute bottom-0 w-full rounded-full transition-[height] duration-100 ease-linear",
+          "absolute bottom-0 w-full rounded-full transition-[height] duration-100 ease-linear motion-reduce:transition-none",
           pct >= 100 ? "bg-success" : "bg-warning"
         )}
         style={{ height: `${Math.min(100, Math.max(0, pct))}%` }}
@@ -642,7 +689,7 @@ function SummaryCard({
                 aria-pressed={pain === n}
                 onClick={() => setPain(n)}
                 className={cn(
-                  "flex h-10 items-center justify-center rounded-md text-sm font-semibold tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "flex h-11 cursor-pointer touch-manipulation items-center justify-center rounded-md text-sm font-semibold tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
                   pain === n
                     ? n <= 3
                       ? "bg-success text-white"

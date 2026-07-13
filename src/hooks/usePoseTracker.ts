@@ -195,11 +195,17 @@ export function usePoseTracker({
       const now = performance.now();
       if (!force && now - lastSpeakRef.current < SPEAK_COOLDOWN_MS) return;
       lastSpeakRef.current = now;
-      synth.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "ru-RU";
       u.rate = 1.05;
-      synth.speak(u);
+      const ru = synth.getVoices().find((v) => v.lang?.toLowerCase().startsWith("ru"));
+      if (ru) u.voice = ru;
+      // Chrome quirks: cancel() immediately followed by speak() can silently
+      // swallow the new utterance, and the queue can wedge in a paused state.
+      // Cancel only when something is queued, resume, and defer the speak.
+      if (synth.speaking || synth.pending) synth.cancel();
+      synth.resume();
+      window.setTimeout(() => synth.speak(u), 30);
     }
 
     function createLandmarker(d: Delegate, m: ModelKind) {
@@ -231,6 +237,8 @@ export function usePoseTracker({
         setStatus("loading");
         setError(null);
         setStats(INITIAL);
+        // voice list loads async in Chrome — warm it so ru-RU is ready later
+        if (typeof window !== "undefined") window.speechSynthesis?.getVoices();
 
         vision = await FilesetResolver.forVisionTasks(WASM_PATH);
         if (cancelled) return;
@@ -486,25 +494,44 @@ export function usePoseTracker({
     ) {
       const w = canvas.width;
       const h = canvas.height;
+      // stroke metrics were tuned on a 720p canvas — scale them with the
+      // actual camera resolution so lines stay equally bold at 1080p+
+      const s = Math.max(0.75, h / 720);
       const visible = (i: number) => (lm[i]?.visibility ?? 0) >= MIN_DRAW_VISIBILITY;
 
-      // body skeleton, muted — only confidently visible segments, so occluded
-      // joints never paint hallucinated lines across the frame
-      ctx.strokeStyle = "rgba(34,211,238,0.5)";
-      ctx.lineWidth = 3;
+      // body skeleton — only confidently visible segments (occluded joints
+      // never paint hallucinated lines), opacity follows model confidence,
+      // and a dark underlay keeps lines readable over bright clothing/walls
       ctx.lineCap = "round";
-      ctx.beginPath();
+      ctx.lineJoin = "round";
       for (const [i, j] of BODY_CONNECTIONS) {
         if (!visible(i) || !visible(j)) continue;
-        ctx.moveTo(lm[i].x * w, lm[i].y * h);
-        ctx.lineTo(lm[j].x * w, lm[j].y * h);
+        const conf = Math.min(lm[i].visibility ?? 1, lm[j].visibility ?? 1);
+        const x1 = lm[i].x * w, y1 = lm[i].y * h;
+        const x2 = lm[j].x * w, y2 = lm[j].y * h;
+        ctx.strokeStyle = `rgba(8,25,35,${(0.35 * conf).toFixed(3)})`;
+        ctx.lineWidth = 6 * s;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(34,211,238,${(0.3 + 0.5 * conf).toFixed(3)})`;
+        ctx.lineWidth = 3.5 * s;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
       }
-      ctx.stroke();
-      ctx.fillStyle = "rgba(34,211,238,0.7)";
       for (const i of BODY_POINTS) {
         if (!visible(i)) continue;
+        const px = lm[i].x * w, py = lm[i].y * h;
         ctx.beginPath();
-        ctx.arc(lm[i].x * w, lm[i].y * h, 4, 0, Math.PI * 2);
+        ctx.arc(px, py, 4.5 * s, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(8,25,35,0.5)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(px, py, 3 * s, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(165,243,252,0.95)";
         ctx.fill();
       }
 
@@ -529,24 +556,36 @@ export function usePoseTracker({
             ? ZONE_DEEP
             : ZONE_ACTIVE;
 
-      // tracked joint triplet, highlighted
+      // tracked joint triplet, highlighted (soft glow only while perf allows)
+      const glow = detEma !== null && detEma < 25;
+      ctx.save();
+      if (glow) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10 * s;
+      }
       ctx.strokeStyle = color;
-      ctx.lineWidth = 6;
+      ctx.lineWidth = 7 * s;
       ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.lineTo(cx, cy);
       ctx.stroke();
+      ctx.restore();
       for (const [px, py] of [[ax, ay], [bx, by], [cx, cy]] as const) {
         ctx.beginPath();
-        ctx.arc(px, py, 7, 0, Math.PI * 2);
+        ctx.arc(px, py, 8 * s, 0, Math.PI * 2);
         ctx.fillStyle = color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(px, py, 3.5 * s, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
         ctx.fill();
       }
 
       // angle arc at the vertex
-      const r = Math.min(48, Math.max(24, h * 0.06));
+      const r = Math.min(64 * s, Math.max(24, h * 0.06));
       const t1 = Math.atan2(ay - by, ax - bx);
       const t2 = Math.atan2(cy - by, cx - bx);
       let delta = t2 - t1;
@@ -561,23 +600,23 @@ export function usePoseTracker({
 
       // angle readout pill next to the vertex, clamped into the frame
       const label = `${snap.angle}°`;
-      ctx.font = "600 16px system-ui, sans-serif";
+      ctx.font = `600 ${Math.round(16 * s)}px system-ui, sans-serif`;
       const tw = ctx.measureText(label).width;
-      const pw = tw + 16;
-      const ph = 26;
-      const px = Math.min(Math.max(bx + r + 10, 4), w - pw - 4);
+      const pw = tw + 16 * s;
+      const ph = 26 * s;
+      const px = Math.min(Math.max(bx + r + 10 * s, 4), w - pw - 4);
       const py = Math.min(Math.max(by - ph / 2, 4), h - ph - 4);
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
-        ctx.roundRect(px, py, pw, ph, 8);
+        ctx.roundRect(px, py, pw, ph, 8 * s);
         ctx.fill();
       } else {
         ctx.fillRect(px, py, pw, ph);
       }
       ctx.fillStyle = "#fff";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, px + 8, py + ph / 2 + 1);
+      ctx.fillText(label, px + 8 * s, py + ph / 2 + 1);
     }
 
     function pushStats(snap: EngineSnapshot, now: number) {
