@@ -18,7 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/context/AuthContext";
 import { useSessions } from "@/context/SessionsContext";
 import { ACTIVE_PLAN, ADHERENCE_TREND, APPOINTMENTS, CURRENT_PATIENT_ID } from "@/lib/mock-data";
-import { getExercise } from "@/lib/exercises";
+import { doseLabel, getExercise } from "@/lib/exercises";
 import { formatDate, formatRelative } from "@/lib/utils";
 
 const DAY = 86400_000;
@@ -127,10 +127,7 @@ export default function PatientDashboard() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="font-medium">{ex.name}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {pe.targetSets} × {pe.targetReps} повт.
-                        {pe.holdSeconds ? ` · удержание ${pe.holdSeconds}с` : ""}
-                      </div>
+                      <div className="text-sm text-muted-foreground">{doseLabel(pe)}</div>
                     </div>
                     {done ? (
                       <Badge variant="success">Выполнено</Badge>
@@ -154,6 +151,7 @@ export default function PatientDashboard() {
             <p className="text-sm text-muted-foreground">Приверженность по неделям</p>
           </CardHeader>
           <CardContent>
+            <div role="img" aria-label="График приверженности лечению по неделям">
             <ResponsiveContainer width="100%" height={180}>
               <AreaChart data={ADHERENCE_TREND} margin={{ left: -20, right: 6, top: 6 }}>
                 <defs>
@@ -171,6 +169,7 @@ export default function PatientDashboard() {
                 <Area type="monotone" dataKey="adherence" stroke="hsl(192 91% 40%)" strokeWidth={2.5} fill="url(#adh)" />
               </AreaChart>
             </ResponsiveContainer>
+            </div>
 
             <div className="mt-4 space-y-3 border-t border-border pt-4">
               <h4 className="flex items-center gap-2 text-sm font-medium">

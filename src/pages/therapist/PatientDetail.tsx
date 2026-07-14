@@ -17,6 +17,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { PATIENTS, PLANS, ROM_TREND, SESSIONS } from "@/lib/mock-data";
+import { demoAction } from "@/lib/demo";
 import { getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "./status";
@@ -67,7 +68,7 @@ export default function TherapistPatientDetail() {
               <MessageSquare className="h-4 w-4" /> Написать
             </Link>
           </Button>
-          <Button>
+          <Button onClick={() => demoAction("Редактирование плана")}>
             <Pencil className="h-4 w-4" /> Изменить план
           </Button>
         </div>

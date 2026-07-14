@@ -1,4 +1,4 @@
-import type { ExerciseDef, ExerciseKey } from "./types";
+import type { ExerciseDef, ExerciseKey, PlanExercise } from "./types";
 
 // MediaPipe Pose landmark indices used below:
 // 11 L-shoulder 12 R-shoulder · 13 L-elbow 14 R-elbow · 15 L-wrist 16 R-wrist
@@ -168,4 +168,12 @@ export const EXERCISE_LIST = Object.values(EXERCISES);
 
 export function getExercise(key: ExerciseKey) {
   return EXERCISES[key];
+}
+
+/** Human-readable dose for a plan item — hold exercises are time-based, not rep-based. */
+export function doseLabel(pe: PlanExercise): string {
+  const ex = EXERCISES[pe.key];
+  if (ex.mode === "hold") return `Удержание ${pe.holdSeconds ?? ex.holdTargetSec ?? 30} с`;
+  const hold = pe.holdSeconds ? ` · пауза ${pe.holdSeconds} с` : "";
+  return `${pe.targetSets} × ${pe.targetReps} повт.${hold}`;
 }

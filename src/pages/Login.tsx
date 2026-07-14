@@ -54,9 +54,9 @@ export default function Login() {
             </span>
             <span className="font-heading text-xl font-bold">POSETRACK</span>
           </div>
-          <h1 className="mt-12 font-heading text-4xl font-bold leading-tight">
+          <p className="mt-12 font-heading text-4xl font-bold leading-tight">
             Дистанционная реабилитация под контролем ИИ
-          </h1>
+          </p>
           <p className="mt-4 max-w-md text-sidebar-foreground">
             Пациенты выполняют упражнения дома, а компьютерное зрение в реальном времени
             отслеживает технику, считает повторения и фиксирует ошибки.
@@ -94,7 +94,7 @@ export default function Login() {
           </div>
 
           <Badge variant="secondary" className="mb-3">Демо · выбор роли</Badge>
-          <h2 className="font-heading text-2xl font-bold">Войти в систему</h2>
+          <h1 className="font-heading text-2xl font-bold">Войти в систему</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Выберите роль, чтобы открыть соответствующий рабочий кабинет.
           </p>

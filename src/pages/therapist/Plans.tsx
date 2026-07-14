@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PATIENTS, PLANS } from "@/lib/mock-data";
+import { demoAction } from "@/lib/demo";
 import { getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 
@@ -21,7 +22,7 @@ export default function TherapistPlans() {
         title="Планы лечения"
         description="Протоколы упражнений, назначенные пациентам."
         actions={
-          <Button>
+          <Button onClick={() => demoAction("Создание плана лечения")}>
             <Plus className="h-4 w-4" /> Новый план
           </Button>
         }

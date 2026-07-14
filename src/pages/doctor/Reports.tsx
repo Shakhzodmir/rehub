@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Avatar } from "@/components/ui/avatar";
 import { PATIENTS } from "@/lib/mock-data";
+import { demoAction } from "@/lib/demo";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "../therapist/status";
 
@@ -45,10 +46,10 @@ export default function DoctorReports() {
                   Обновлён {formatDate(p.lastActive, { day: "numeric", month: "short" })}
                 </span>
                 <div className="flex gap-2">
-                  <Button variant="ghost" size="sm">
+                  <Button variant="ghost" size="sm" onClick={() => demoAction("Просмотр отчёта")}>
                     <FileText className="h-4 w-4" /> Открыть
                   </Button>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" onClick={() => demoAction("Экспорт в PDF")}>
                     <Download className="h-4 w-4" /> PDF
                   </Button>
                 </div>

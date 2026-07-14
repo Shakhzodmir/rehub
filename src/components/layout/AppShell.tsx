@@ -1,6 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { Sheet } from "@/components/ui/dialog";
 import type { Role } from "@/lib/types";
@@ -11,12 +10,25 @@ export function AppShell({ role }: { role: Role }) {
   const { user } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
+
+  // move screen-reader/keyboard focus to the content after each navigation
+  useEffect(() => {
+    mainRef.current?.focus({ preventScroll: true });
+  }, [location.pathname]);
 
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
   if (user.role !== role) return <Navigate to={`/${user.role}`} replace />;
 
   return (
     <div className="flex min-h-dvh bg-background">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+      >
+        Перейти к содержимому
+      </a>
+
       {/* Desktop sidebar */}
       <aside className="hidden w-64 shrink-0 lg:block">
         <div className="fixed inset-y-0 w-64">
@@ -31,7 +43,12 @@ export function AppShell({ role }: { role: Role }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onMenu={() => setMobileOpen(true)} />
-        <main className={cn("flex-1 px-4 py-6 sm:px-6 lg:px-8")}>
+        <main
+          id="main"
+          ref={mainRef}
+          tabIndex={-1}
+          className="flex-1 px-4 py-6 outline-none sm:px-6 lg:px-8"
+        >
           <div className="mx-auto w-full max-w-7xl animate-fade-in">
             <Outlet />
           </div>

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { PLATFORM_USERS } from "@/lib/mock-data";
+import { demoAction } from "@/lib/demo";
 import { formatDate } from "@/lib/utils";
 
 const statusVariant = (s: string) =>
@@ -77,7 +78,12 @@ export default function AdminUsers() {
                   <TD><Badge variant={statusVariant(u.status)}>{u.status}</Badge></TD>
                   <TD className="text-sm text-muted-foreground">{formatDate(u.joined, { day: "numeric", month: "short", year: "numeric" })}</TD>
                   <TD>
-                    <Button variant="ghost" size="icon" aria-label={`Управление ${u.name}`}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Управление ${u.name}`}
+                      onClick={() => demoAction("Управление пользователем")}
+                    >
                       <UserCog className="h-4 w-4 text-muted-foreground" />
                     </Button>
                   </TD>

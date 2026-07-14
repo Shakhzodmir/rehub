@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EXERCISE_LIST } from "@/lib/exercises";
+import { demoAction } from "@/lib/demo";
 
 const diffVariant = {
   "Лёгкое": "success",
@@ -19,7 +20,7 @@ export default function AdminExercises() {
         title="Библиотека упражнений"
         description="Каталог упражнений и параметры детекции для компьютерного зрения."
         actions={
-          <Button>
+          <Button onClick={() => demoAction("Добавление упражнения")}>
             <Plus className="h-4 w-4" /> Добавить упражнение
           </Button>
         }
@@ -67,7 +68,12 @@ export default function AdminExercises() {
                       : `[${ex.joint.join(", ")}] · ${ex.downAngle}°–${ex.upAngle}°`}
                   </TD>
                   <TD>
-                    <Button variant="ghost" size="icon" aria-label={`Изменить ${ex.name}`}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Изменить ${ex.name}`}
+                      onClick={() => demoAction("Редактирование упражнения")}
+                    >
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>
                   </TD>

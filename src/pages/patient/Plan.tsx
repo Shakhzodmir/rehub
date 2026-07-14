@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ACTIVE_PLAN, USERS } from "@/lib/mock-data";
-import { getExercise } from "@/lib/exercises";
+import { doseLabel, getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 
 export default function PatientPlan() {
@@ -36,10 +36,7 @@ export default function PatientPlan() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="font-medium">{ex.name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {pe.targetSets} подхода × {pe.targetReps} повт.
-                      {pe.holdSeconds ? ` · удержание ${pe.holdSeconds}с` : ""}
-                    </div>
+                    <div className="text-sm text-muted-foreground">{doseLabel(pe)}</div>
                   </div>
                   <Button asChild size="sm" variant="outline">
                     <Link to={`/patient/session/${pe.key}`}>

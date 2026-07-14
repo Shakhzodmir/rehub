@@ -97,6 +97,7 @@ export default function PatientProgress() {
               Данных пока нет — завершите тренировку, чтобы увидеть динамику.
             </p>
           ) : (
+            <div role="img" aria-label={isROM ? "График амплитуды движения по тренировкам" : "График уровня боли по тренировкам"}>
             <ResponsiveContainer width="100%" height={280}>
               <LineChart data={series} margin={{ left: -16, right: 8, top: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(200 32% 92%)" vertical={false} />
@@ -123,6 +124,7 @@ export default function PatientProgress() {
                 />
               </LineChart>
             </ResponsiveContainer>
+            </div>
           )}
         </CardContent>
       </Card>

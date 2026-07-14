@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Bell, LogOut, Menu, Repeat } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { ROLE_LABELS } from "./nav-config";
 
@@ -14,7 +15,7 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
       <button
         onClick={onMenu}
-        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
+        className="inline-flex h-11 w-11 cursor-pointer touch-manipulation items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
         aria-label="Открыть меню"
       >
         <Menu className="h-5 w-5" />
@@ -35,7 +36,8 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
         </Button>
 
         <button
-          className="relative rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={() => toast({ title: "Уведомлений нет", description: "Новые уведомления появятся здесь." })}
+          className="inline-flex h-11 w-11 cursor-pointer touch-manipulation items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Уведомления"
         >
           <Bell className="h-5 w-5" />

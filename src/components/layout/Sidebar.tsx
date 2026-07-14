@@ -24,7 +24,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         {onNavigate && (
           <button
             onClick={onNavigate}
-            className="rounded-md p-1 text-sidebar-foreground/70 hover:text-white lg:hidden"
+            className="inline-flex h-11 w-11 cursor-pointer touch-manipulation items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-accent lg:hidden"
             aria-label="Закрыть меню"
           >
             <X className="h-5 w-5" />

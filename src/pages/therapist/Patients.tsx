@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { PATIENTS } from "@/lib/mock-data";
+import { demoAction } from "@/lib/demo";
 import { formatRelative } from "@/lib/utils";
 import { statusBadge } from "./status";
 
@@ -35,7 +36,7 @@ export default function TherapistPatients() {
         title="Пациенты"
         description="Все пациенты под вашим наблюдением."
         actions={
-          <Button>
+          <Button onClick={() => demoAction("Добавление пациента")}>
             <UserPlus className="h-4 w-4" /> Добавить пациента
           </Button>
         }
