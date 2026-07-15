@@ -9,25 +9,27 @@ import { Avatar } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { Tabs } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { PATIENTS } from "@/lib/mock-data";
-import { demoAction } from "@/lib/demo";
+import { AddPatientDialog } from "@/components/therapist/AddPatientDialog";
+import { useClinic } from "@/context/ClinicContext";
 import { formatRelative } from "@/lib/utils";
 import { statusBadge } from "./status";
 
 export default function TherapistPatients() {
+  const { patients } = useClinic();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  const [adding, setAdding] = useState(false);
 
   const filtered = useMemo(
     () =>
-      PATIENTS.filter((p) => {
+      patients.filter((p) => {
         const matchesQ =
           p.name.toLowerCase().includes(q.toLowerCase()) ||
           p.condition.toLowerCase().includes(q.toLowerCase());
         const matchesF = filter === "all" || p.status === filter;
         return matchesQ && matchesF;
       }),
-    [q, filter]
+    [patients, q, filter]
   );
 
   return (
@@ -36,11 +38,12 @@ export default function TherapistPatients() {
         title="Пациенты"
         description="Все пациенты под вашим наблюдением."
         actions={
-          <Button onClick={() => demoAction("Добавление пациента")}>
+          <Button onClick={() => setAdding(true)}>
             <UserPlus className="h-4 w-4" /> Добавить пациента
           </Button>
         }
       />
+      <AddPatientDialog open={adding} onClose={() => setAdding(false)} />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-xs">

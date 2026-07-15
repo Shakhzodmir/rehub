@@ -3,7 +3,8 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { ChatThread } from "@/components/common/ChatThread";
 import { Avatar } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import { MESSAGES, PATIENTS, USERS } from "@/lib/mock-data";
+import { MESSAGES, USERS } from "@/lib/mock-data";
+import { useClinic } from "@/context/ClinicContext";
 import type { Message } from "@/lib/types";
 
 const threadFor = (patientId: string, patientName: string): Message[] => {
@@ -22,9 +23,19 @@ const threadFor = (patientId: string, patientName: string): Message[] => {
 };
 
 export default function TherapistMessages() {
-  const contacts = PATIENTS.filter((p) => p.status !== "discharged");
-  const [activeId, setActiveId] = useState(contacts[0].id);
-  const active = contacts.find((c) => c.id === activeId)!;
+  const { patients } = useClinic();
+  const contacts = patients.filter((p) => p.status !== "discharged");
+  const [activeId, setActiveId] = useState(contacts[0]?.id ?? "");
+  const active = contacts.find((c) => c.id === activeId) ?? contacts[0];
+
+  if (!active) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Сообщения" description="Переписка с пациентами." />
+        <p className="text-sm text-muted-foreground">Пока нет активных пациентов.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

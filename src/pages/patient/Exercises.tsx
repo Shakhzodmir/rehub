@@ -5,7 +5,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EXERCISE_LIST } from "@/lib/exercises";
-import { ACTIVE_PLAN } from "@/lib/mock-data";
+import { CURRENT_PATIENT_ID } from "@/lib/mock-data";
+import { useClinic } from "@/context/ClinicContext";
 
 const diffVariant = {
   "Лёгкое": "success",
@@ -14,7 +15,8 @@ const diffVariant = {
 } as const;
 
 export default function PatientExercises() {
-  const inPlan = new Set(ACTIVE_PLAN.exercises.map((e) => e.key));
+  const { planFor } = useClinic();
+  const inPlan = new Set(planFor(CURRENT_PATIENT_ID)?.exercises.map((e) => e.key) ?? []);
 
   return (
     <div className="space-y-6">

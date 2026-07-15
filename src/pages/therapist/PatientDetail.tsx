@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   Activity,
@@ -9,24 +10,41 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { PATIENTS, PLANS, ROM_TREND, SESSIONS } from "@/lib/mock-data";
-import { demoAction } from "@/lib/demo";
+import { PlanFormDialog } from "@/components/therapist/PlanFormDialog";
+import { useClinic } from "@/context/ClinicContext";
+import { useSessions } from "@/context/SessionsContext";
 import { getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "./status";
 
 export default function TherapistPatientDetail() {
   const { id } = useParams<{ id: string }>();
-  const patient = PATIENTS.find((p) => p.id === id);
-  const plan = PLANS.find((pl) => pl.patientId === id);
-  const sessions = SESSIONS.filter((s) => s.patientId === id);
+  const { patients, planFor } = useClinic();
+  const { sessionsFor } = useSessions();
+  const [editingPlan, setEditingPlan] = useState(false);
+
+  const patient = patients.find((p) => p.id === id);
+  const plan = id ? planFor(id) : undefined;
+  const sessions = id ? sessionsFor(id) : []; // newest first, real + seed
+
+  // per-patient ROM series from their actual sessions (oldest → newest)
+  const romSeries = useMemo(
+    () =>
+      [...sessions]
+        .reverse()
+        .filter((s) => s.achievedROM)
+        .map((s) => ({
+          label: formatDate(s.date, { day: "numeric", month: "short" }),
+          rom: s.achievedROM,
+        })),
+    [sessions]
+  );
 
   if (!patient) {
     return (
@@ -68,11 +86,17 @@ export default function TherapistPatientDetail() {
               <MessageSquare className="h-4 w-4" /> Написать
             </Link>
           </Button>
-          <Button onClick={() => demoAction("Редактирование плана")}>
-            <Pencil className="h-4 w-4" /> Изменить план
+          <Button onClick={() => setEditingPlan(true)}>
+            <Pencil className="h-4 w-4" /> {plan ? "Изменить план" : "Назначить план"}
           </Button>
         </div>
       </div>
+      <PlanFormDialog
+        open={editingPlan}
+        onClose={() => setEditingPlan(false)}
+        plan={plan}
+        patientId={patient.id}
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <MiniStat label="Восстановление" value={`${patient.recoveryProgress}%`} progress={patient.recoveryProgress} />
@@ -93,20 +117,28 @@ export default function TherapistPatientDetail() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={240}>
-              <AreaChart data={ROM_TREND} margin={{ left: -16, right: 8, top: 8 }}>
-                <defs>
-                  <linearGradient id="rom" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="hsl(192 91% 40%)" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="hsl(192 91% 40%)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="week" tick={{ fontSize: 12 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid hsl(200 32% 89%)", fontSize: 12 }} />
-                <Area type="monotone" dataKey="rom" stroke="hsl(192 91% 40%)" strokeWidth={3} fill="url(#rom)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {romSeries.length > 0 ? (
+              <div role="img" aria-label={`График амплитуды движения пациента ${patient.name}`}>
+                <ResponsiveContainer width="100%" height={240}>
+                  <AreaChart data={romSeries} margin={{ left: -16, right: 8, top: 8 }}>
+                    <defs>
+                      <linearGradient id="rom" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(192 91% 40%)" stopOpacity={0.3} />
+                        <stop offset="100%" stopColor="hsl(192 91% 40%)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 12 }} stroke="hsl(200 16% 60%)" tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid hsl(200 32% 89%)", fontSize: 12 }} />
+                    <Area type="monotone" dataKey="rom" stroke="hsl(192 91% 40%)" strokeWidth={3} fill="url(#rom)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="py-16 text-center text-sm text-muted-foreground">
+                Пока нет измерений ROM — они появятся после первых тренировок пациента.
+              </p>
+            )}
           </CardContent>
         </Card>
 

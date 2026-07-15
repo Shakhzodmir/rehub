@@ -25,8 +25,9 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/components/ui/use-toast";
 import { getExercise } from "@/lib/exercises";
-import { ACTIVE_PLAN, CURRENT_PATIENT_ID } from "@/lib/mock-data";
+import { CURRENT_PATIENT_ID } from "@/lib/mock-data";
 import { usePoseTracker, type RepEvent } from "@/hooks/usePoseTracker";
+import { useClinic } from "@/context/ClinicContext";
 import { useSessions } from "@/context/SessionsContext";
 import type { ExerciseKey, RepRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -63,9 +64,10 @@ export default function PatientSession() {
   const { key } = useParams<{ key: ExerciseKey }>();
   const navigate = useNavigate();
   const { addSession } = useSessions();
+  const { planFor } = useClinic();
   const exercise = key ? getExercise(key) : undefined;
 
-  const planItem = ACTIVE_PLAN.exercises.find((e) => e.key === key);
+  const planItem = planFor(CURRENT_PATIENT_ID)?.exercises.find((e) => e.key === key);
   const targetReps = planItem?.targetReps ?? 12;
   const targetSets = planItem?.targetSets ?? 3;
   const goal = targetReps * targetSets;

@@ -16,8 +16,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/context/AuthContext";
+import { useClinic } from "@/context/ClinicContext";
 import { useSessions } from "@/context/SessionsContext";
-import { ACTIVE_PLAN, ADHERENCE_TREND, APPOINTMENTS, CURRENT_PATIENT_ID } from "@/lib/mock-data";
+import { ADHERENCE_TREND, APPOINTMENTS, CURRENT_PATIENT_ID } from "@/lib/mock-data";
 import { doseLabel, getExercise } from "@/lib/exercises";
 import { formatDate, formatRelative } from "@/lib/utils";
 
@@ -45,14 +46,17 @@ function computeStreak(dates: Set<string>) {
 
 export default function PatientDashboard() {
   const { user } = useAuth();
+  const { planFor } = useClinic();
   const { sessionsFor } = useSessions();
   const mySessions = sessionsFor(CURRENT_PATIENT_ID); // newest first
+  const plan = planFor(CURRENT_PATIENT_ID);
+  const planExercises = plan?.exercises ?? [];
 
   const firstName = user?.name?.split(" ")[0] ?? "пациент";
   const todayKey = new Date().toDateString();
   const todaySessions = mySessions.filter((s) => new Date(s.date).toDateString() === todayKey);
 
-  const todayTargetSets = ACTIVE_PLAN.exercises.reduce((sum, e) => sum + e.targetSets, 0);
+  const todayTargetSets = planExercises.reduce((sum, e) => sum + e.targetSets, 0);
   const doneSets = todaySessions.length;
   const dayProgress = todayTargetSets > 0 ? Math.min(100, Math.round((doneSets / todayTargetSets) * 100)) : 0;
 
@@ -104,7 +108,9 @@ export default function PatientDashboard() {
           <CardHeader className="flex-row items-center justify-between">
             <div>
               <CardTitle>План на сегодня</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">{ACTIVE_PLAN.title}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {plan?.title ?? "План ещё не назначен"}
+              </p>
             </div>
             <Badge variant={dayProgress >= 100 ? "success" : "default"}>
               {doneSets}/{todayTargetSets} подходов
@@ -113,7 +119,12 @@ export default function PatientDashboard() {
           <CardContent className="space-y-4">
             <Progress value={dayProgress} indicatorClassName="bg-accent" label="Прогресс дня" />
             <div className="divide-y divide-border rounded-lg border border-border">
-              {ACTIVE_PLAN.exercises.map((pe) => {
+              {planExercises.length === 0 && (
+                <p className="p-6 text-center text-sm text-muted-foreground">
+                  Терапевт ещё не назначил упражнения — они появятся здесь.
+                </p>
+              )}
+              {planExercises.map((pe) => {
                 const ex = getExercise(pe.key);
                 const done = todaySessions.some((s) => s.exercise === pe.key);
                 return (

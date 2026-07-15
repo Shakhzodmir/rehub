@@ -8,14 +8,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
-import { PATIENTS, EXERCISE_USAGE } from "@/lib/mock-data";
+import { EXERCISE_USAGE } from "@/lib/mock-data";
+import { useClinic } from "@/context/ClinicContext";
 import { formatRelative } from "@/lib/utils";
 import { statusBadge } from "./status";
 
 export default function TherapistDashboard() {
-  const active = PATIENTS.filter((p) => p.status === "active");
-  const atRisk = PATIENTS.filter((p) => p.status === "at-risk");
-  const avgAdherence = Math.round(PATIENTS.reduce((s, p) => s + p.adherence, 0) / PATIENTS.length);
+  const { patients } = useClinic();
+  const active = patients.filter((p) => p.status === "active");
+  const atRisk = patients.filter((p) => p.status === "at-risk");
+  const avgAdherence = patients.length
+    ? Math.round(patients.reduce((s, p) => s + p.adherence, 0) / patients.length)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -42,7 +46,7 @@ export default function TherapistDashboard() {
             </Button>
           </CardHeader>
           <CardContent className="space-y-2">
-            {PATIENTS.map((p) => (
+            {patients.slice(0, 6).map((p) => (
               <Link
                 key={p.id}
                 to={`/therapist/patients/${p.id}`}

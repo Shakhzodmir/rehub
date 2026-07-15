@@ -1,11 +1,12 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ClipboardList, Plus } from "lucide-react";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PATIENTS, PLANS } from "@/lib/mock-data";
-import { demoAction } from "@/lib/demo";
+import { PlanFormDialog } from "@/components/therapist/PlanFormDialog";
+import { useClinic } from "@/context/ClinicContext";
 import { getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 
@@ -16,21 +17,25 @@ const STATUS = {
 };
 
 export default function TherapistPlans() {
+  const { plans, patients } = useClinic();
+  const [creating, setCreating] = useState(false);
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Планы лечения"
         description="Протоколы упражнений, назначенные пациентам."
         actions={
-          <Button onClick={() => demoAction("Создание плана лечения")}>
+          <Button onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" /> Новый план
           </Button>
         }
       />
+      <PlanFormDialog open={creating} onClose={() => setCreating(false)} />
 
       <div className="grid gap-4 md:grid-cols-2">
-        {PLANS.map((plan) => {
-          const patient = PATIENTS.find((p) => p.id === plan.patientId);
+        {plans.map((plan) => {
+          const patient = patients.find((p) => p.id === plan.patientId);
           const st = STATUS[plan.status];
           return (
             <Card key={plan.id}>

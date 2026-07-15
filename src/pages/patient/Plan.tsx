@@ -5,13 +5,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ACTIVE_PLAN, USERS } from "@/lib/mock-data";
+import { CURRENT_PATIENT_ID, USERS } from "@/lib/mock-data";
+import { useClinic } from "@/context/ClinicContext";
 import { doseLabel, getExercise } from "@/lib/exercises";
 import { formatDate } from "@/lib/utils";
 
 export default function PatientPlan() {
-  const plan = ACTIVE_PLAN;
+  const { planFor } = useClinic();
+  const plan = planFor(CURRENT_PATIENT_ID);
   const therapist = USERS.therapist;
+
+  if (!plan) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Мой план лечения" description="План ещё не назначен." />
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            Ваш терапевт ещё не назначил программу. Напишите ему в разделе «Сообщения».
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
