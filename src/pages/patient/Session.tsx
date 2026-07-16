@@ -450,6 +450,20 @@ export default function PatientSession() {
                       : "Плохая видимость суставов — отойдите дальше"}
                   </div>
                 )}
+
+                {calibrated && stats.positioning === "good" && stats.viewHint && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={cn(
+                      "absolute inset-x-0 mx-auto flex w-fit items-center gap-2 rounded-full bg-warning px-4 py-1.5 text-sm font-medium text-[hsl(var(--warning-foreground))] shadow-lg",
+                      isFullscreen ? "top-6" : "top-3"
+                    )}
+                  >
+                    <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                    {stats.viewHint} — так измерение точнее
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -462,7 +476,7 @@ export default function PatientSession() {
                     ? `Стабильность ${stats.balanceScore}% · удерживайте равновесие`
                     : isHold
                       ? `Удержание ${mmss(holdSec)} из ${mmss(holdTarget)} · ${stats.holding ? "в позиции ✓" : "займите позицию"}`
-                      : `Стадия: ${stats.stage === "down" ? "вниз" : stats.stage === "up" ? "вверх" : "—"} · угол ${stats.angle}°` +
+                      : `Стадия: ${stats.stage === "down" ? "вниз" : stats.stage === "up" ? "вверх" : "—"} · угол ${stats.viewOk ? "" : "~"}${stats.angle}°` +
                         (stats.avgRepMs != null ? ` · темп ${(stats.avgRepMs / 1000).toFixed(1)} с` : "") +
                         (stats.symmetry != null ? ` · симметрия ${stats.symmetry}%` : "")}
                 </div>

@@ -36,6 +36,24 @@ function squatFrame(angle: number, opts: { leftAngle?: number; leanX?: number; r
   return lm;
 }
 
+/**
+ * Standing patient squared to the camera (front view): shoulders spread wide
+ * in x, legs straight. Used to test the "turn side-on" orientation guidance.
+ */
+function facingFrame(): Point[] {
+  const lm = emptyLm();
+  const set = (i: number, x: number, y: number) => (lm[i] = { x, y, visibility: 0.95 });
+  set(12, 0.38, 0.3); // right shoulder
+  set(11, 0.62, 0.3); // left shoulder
+  set(24, 0.44, 0.55); // right hip
+  set(23, 0.56, 0.55); // left hip
+  set(26, 0.44, 0.72); // right knee
+  set(25, 0.56, 0.72); // left knee
+  set(28, 0.44, 0.9); // right ankle
+  set(27, 0.56, 0.9); // left ankle
+  return lm;
+}
+
 /** Drive the engine through a list of [angle, frames] segments. */
 function run(
   engine: ExerciseEngine,
@@ -322,6 +340,41 @@ describe("aspect correction", () => {
 
     expect(squareRun.last.angle).toBeCloseTo(135, 0);
     expect(wideRun.last.angle).toBeCloseTo(117, 0);
+  });
+});
+
+describe("orientation guidance", () => {
+  it("accepts a proper side-on view for a sagittal exercise", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const { last } = run(engine, [{ angle: 175, frames: 10 }]);
+    expect(last.facing).toBe("side");
+    expect(last.viewOk).toBe(true);
+    expect(last.viewHint).toBeNull();
+  });
+
+  it("asks a front-facing patient to turn side-on for a sagittal exercise", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const { last } = run(engine, [{ frames: 12, lm: () => facingFrame() }]);
+    expect(last.facing).toBe("front");
+    expect(last.viewOk).toBe(false);
+    expect(last.viewHint).toMatch(/боком/i);
+  });
+
+  it("asks a side-on patient to face the camera for a frontal exercise", () => {
+    const engine = new ExerciseEngine(squatDef({ view: "front" }));
+    const { last } = run(engine, [{ angle: 175, frames: 12 }]); // squatFrame is side-on
+    expect(last.facing).toBe("side");
+    expect(last.viewOk).toBe(false);
+    expect(last.viewHint).toMatch(/лицом/i);
+  });
+
+  it("does not nag when tracking is lost", () => {
+    const engine = new ExerciseEngine(squatDef());
+    // establish a wrong (front) view, then lose the pose
+    run(engine, [{ frames: 8, lm: () => facingFrame() }]);
+    const { last } = run(engine, [{ frames: 5, lm: () => null }]);
+    expect(last.viewHint).toBeNull();
+    expect(last.viewOk).toBe(true);
   });
 });
 

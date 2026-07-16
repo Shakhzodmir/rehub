@@ -24,6 +24,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     depthMargin: 8,
     targetROM: 135,
     plane: "sagittal",
+    view: "side",
     minTempoMs: 1200,
     shallowCue: "Глубже — опускайтесь ниже",
     formRules: [
@@ -55,6 +56,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "flex",
     depthMargin: 8,
     plane: "sagittal",
+    view: "side",
     minTempoMs: 1000,
     shallowCue: "Ниже — сгибайте локти сильнее",
     formRules: [
@@ -82,6 +84,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "extend",
     depthMargin: 10,
     plane: "frontal", // seen head-on → use 3D angle so depth doesn't collapse it
+    view: "front",
     shallowCue: "Руки выше — до конца вверх",
     cues: ["Руки полностью вверх", "Ноги на ширину плеч в прыжке", "Держите ритм"],
   },
@@ -99,6 +102,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "flex",
     depthMargin: 8,
     plane: "sagittal",
+    view: "side",
     minTempoMs: 1200,
     shallowCue: "Глубже — переднее колено к 90°",
     formRules: [
@@ -126,6 +130,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     effortPhase: "extend",
     depthMargin: 6,
     plane: "sagittal",
+    view: "side",
     minTempoMs: 1000,
     shallowCue: "Выше — таз до прямой линии",
     cues: ["Поднимайте таз до прямой линии", "Сжимайте ягодицы наверху", "Не прогибайте поясницу"],
@@ -143,6 +148,7 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     upAngle: 180,
     holdTargetSec: 30,
     plane: "sagittal",
+    view: "side",
     cues: [
       "Тело прямой линией от плеч до пяток",
       "Подтяните живот, не провисайте тазом",

@@ -17,6 +17,8 @@ import { OneEuroFilter } from "./oneEuro";
 export type Stage = "up" | "down" | "unknown";
 export type Positioning = "good" | "no-pose" | "low-visibility";
 export type Side = "left" | "right";
+/** which way the patient is turned relative to the camera */
+export type Facing = "front" | "side" | "oblique";
 
 export type EngineEvent =
   | {
@@ -62,6 +64,12 @@ export interface EngineSnapshot {
   trackedMs: number;
   /** live progress toward the effort target, 0-100 (≥100 = deep enough) */
   depthPct: number;
+  /** how the patient is turned relative to the camera */
+  facing: Facing;
+  /** the patient is presenting the view the angle can be measured accurately from */
+  viewOk: boolean;
+  /** guidance to fix the camera view (e.g. "turn side-on"), or null when it's fine */
+  viewHint: string | null;
 }
 
 // minimum time between counted reps — rejects jitter that briefly recrosses both thresholds
@@ -81,7 +89,14 @@ const MAX_STEP_MS = 500;
 // hold mode: voice milestone every N seconds
 const HOLD_MILESTONE_SEC = 10;
 
+// orientation: sideness (0 = square to camera, 1 = full profile). Hysteresis
+// band so a patient hovering near the boundary doesn't flip the hint on/off.
+const SIDE_ON = 0.55;
+const FRONT_ON = 0.35;
+
 const TOO_FAST_CUE = "Слишком быстро — выполняйте плавнее";
+const TURN_SIDE_CUE = "Встаньте боком к камере";
+const TURN_FRONT_CUE = "Повернитесь лицом к камере";
 
 export interface EngineOptions {
   /**
@@ -104,6 +119,8 @@ export class ExerciseEngine {
   private readonly depthMargin: number;
   private readonly use3D: boolean;
   private readonly sideSelect: boolean;
+  /** camera view the angle is trustworthy from; null = orientation not checked */
+  private readonly desiredView: "side" | "front" | null;
   private readonly jointsBySide: Record<Side, [number, number, number]>;
 
   private side: Side = "right";
@@ -142,6 +159,11 @@ export class ExerciseEngine {
   private sway = 0;
   private balance = 100;
 
+  private sideEma: number | null = null;
+  private facing: Facing = "side";
+  private viewOk = true;
+  private viewHint: string | null = null;
+
   private lastAngle = 0;
   private events: EngineEvent[] = [];
   // width/height of the source frame. Normalized landmark coords are
@@ -156,6 +178,8 @@ export class ExerciseEngine {
     this.depthMargin = def.depthMargin ?? 5;
     this.use3D = def.plane === "frontal";
     this.sideSelect = def.sideSelect ?? def.mode !== "balance";
+    this.desiredView =
+      def.mode === "balance" ? null : (def.view ?? (def.plane === "frontal" ? "front" : "side"));
     this.jointsBySide = {
       right: def.joint,
       left: mirrorJoints(def.joint),
@@ -225,6 +249,7 @@ export class ExerciseEngine {
       return this.snapshot("low-visibility", this.lastAngle);
     }
     this.lastVisibleTs = t;
+    this.updateOrientation(lm, wl);
 
     // 3D world angle for frontal-plane moves (resists foreshortening), else
     // aspect-corrected 2D
@@ -288,6 +313,50 @@ export class ExerciseEngine {
       this.effortStartTs = null;
       this.effortZoneMs = 0;
     }
+  }
+
+  // ---- orientation ---------------------------------------------------------
+
+  /**
+   * Estimate how side-on the patient is and, if it doesn't match the view the
+   * exercise is measured from, produce a "turn" hint. A sagittal knee/elbow
+   * angle read from the front (or vice-versa) is off by tens of degrees, so the
+   * cheapest accuracy win is catching the wrong pose and asking them to turn.
+   */
+  private updateOrientation(lm: Point[], wl?: Point[] | null) {
+    if (this.desiredView === null) return;
+    const ls = lm[11];
+    const rs = lm[12];
+    if ((ls?.visibility ?? 0) < 0.5 || (rs?.visibility ?? 0) < 0.5) return; // can't tell yet
+
+    let sideness: number;
+    if (wl && wl[11] && wl[12]) {
+      // world landmarks are metric & gravity-aligned: facing the camera the
+      // shoulders separate mostly in X (width); side-on, mostly in Z (depth)
+      const dx = Math.abs(wl[11].x - wl[12].x);
+      const dz = Math.abs((wl[11].z ?? 0) - (wl[12].z ?? 0));
+      sideness = dz / (dx + dz + 1e-6);
+    } else {
+      // 2D fallback: shoulder width collapses relative to torso height side-on
+      const sw = Math.abs(ls.x - rs.x) * this.aspect;
+      const shY = (ls.y + rs.y) / 2;
+      const lh = lm[23];
+      const rh = lm[24];
+      const hiY = lh && rh ? (lh.y + rh.y) / 2 : shY + 0.25;
+      const th = Math.abs(hiY - shY) || 1e-6;
+      const ratio = sw / th; // ≈1 facing, ≈0.1 side-on
+      sideness = Math.min(1, Math.max(0, (0.6 - ratio) / (0.6 - 0.2)));
+    }
+
+    this.sideEma = this.sideEma === null ? sideness : this.sideEma * 0.85 + sideness * 0.15;
+    const s = this.sideEma;
+    this.facing = s >= SIDE_ON ? "side" : s <= FRONT_ON ? "front" : "oblique";
+    this.viewOk = this.facing === this.desiredView;
+    this.viewHint = this.viewOk
+      ? null
+      : this.desiredView === "side"
+        ? TURN_SIDE_CUE
+        : TURN_FRONT_CUE;
   }
 
   // ---- shared gates --------------------------------------------------------
@@ -524,6 +593,10 @@ export class ExerciseEngine {
       holding: this.holding,
       trackedMs: Math.round(this.trackedMs),
       depthPct: positioning === "good" ? this.depthPct(angle) : 0,
+      facing: this.facing,
+      // only nag about the view while the body is actually tracked
+      viewOk: positioning === "good" ? this.viewOk : true,
+      viewHint: positioning === "good" ? this.viewHint : null,
     };
   }
 }

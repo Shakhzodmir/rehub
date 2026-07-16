@@ -62,6 +62,13 @@ export interface ExerciseDef {
   targetROM?: number;
   /** sagittal = 2D angle (default); frontal/3d = use z to resist foreshortening */
   plane?: "sagittal" | "frontal";
+  /**
+   * Camera view the joint angle is only trustworthy from. Off-axis views inflate
+   * angle error 3-4× (oblique) up to clinically useless in the transverse plane,
+   * so the engine detects the patient's orientation and prompts them to turn.
+   * Defaults to "side" for sagittal exercises and "front" for frontal ones.
+   */
+  view?: "side" | "front";
   /** per-rep corrective cue spoken/shown when the effort peak is too shallow */
   shallowCue?: string;
   /** secondary technique checks (torso lean, hip sag, …) beyond the depth check */

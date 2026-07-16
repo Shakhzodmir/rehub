@@ -25,6 +25,8 @@ export type ModelKind = keyof typeof MODELS;
 
 // don't repeat the same spoken cue more often than this
 const SPEAK_COOLDOWN_MS = 1500;
+// re-prompt the "turn to the camera" hint at most this often
+const VIEW_SPEAK_MS = 5000;
 // UI re-renders are capped at this rate; rep/stage/positioning changes bypass the cap
 const STATS_PUSH_MS = 100;
 // this many consecutive detectForVideo failures triggers one CPU re-init …
@@ -116,6 +118,9 @@ const INITIAL: PoseStats = {
   holding: false,
   trackedMs: 0,
   depthPct: 0,
+  facing: "side",
+  viewOk: true,
+  viewHint: null,
   fps: 0,
   inferenceMs: 0,
   delegate: "GPU",
@@ -186,7 +191,9 @@ export function usePoseTracker({
 
     // render throttling
     let lastPushTs = 0;
-    let lastPushed = { reps: -1, stage: "", positioning: "", holding: false };
+    let lastPushed = { reps: -1, stage: "", positioning: "", holding: false, viewOk: true };
+    // orientation-hint voice throttle
+    let lastViewSpeak = 0;
 
     function speak(text: string, force = false) {
       if (!voiceRef.current || typeof window === "undefined") return;
@@ -452,6 +459,13 @@ export function usePoseTracker({
 
         const snap = engine.step(valid ? lm : null, wl, ts);
 
+        // a wrong camera view makes the angle unreliable — guide the patient to
+        // turn before anything else, on its own gentler cadence
+        if (snap.viewHint && performance.now() - lastViewSpeak > VIEW_SPEAK_MS) {
+          lastViewSpeak = performance.now();
+          speak(snap.viewHint, true);
+        }
+
         for (const ev of engine.takeEvents()) {
           if (ev.type === "rep") {
             if (ev.good) speak(String(ev.count));
@@ -537,6 +551,32 @@ export function usePoseTracker({
 
       if (exercise.mode === "balance" || snap.positioning !== "good") return;
 
+      // wrong camera view — a prominent banner asks the patient to turn; the
+      // angle below is drawn but marked approximate (~) since it can't be trusted
+      if (snap.viewHint) {
+        ctx.save();
+        ctx.font = `600 ${Math.round(16 * s)}px system-ui, sans-serif`;
+        const tw = ctx.measureText(snap.viewHint).width;
+        const pad = 14 * s;
+        const bw = tw + pad * 2;
+        const bh = 34 * s;
+        const bx = (w - bw) / 2;
+        const by = 14 * s;
+        ctx.fillStyle = "rgba(180,83,9,0.92)";
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, bw, bh, 10 * s);
+          ctx.fill();
+        } else {
+          ctx.fillRect(bx, by, bw, bh);
+        }
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(snap.viewHint, w / 2, by + bh / 2 + 1);
+        ctx.restore();
+      }
+
       const [ai, bi, ci] = snap.activeJoints;
       const a = lm[ai];
       const b = lm[bi];
@@ -598,8 +638,9 @@ export function usePoseTracker({
       ctx.fillStyle = hexToRgba(color, 0.25);
       ctx.fill();
 
-      // angle readout pill next to the vertex, clamped into the frame
-      const label = `${snap.angle}°`;
+      // angle readout pill next to the vertex, clamped into the frame.
+      // a "~" marks the angle approximate when the view is off-axis
+      const label = `${snap.viewOk ? "" : "~"}${snap.angle}°`;
       ctx.font = `600 ${Math.round(16 * s)}px system-ui, sans-serif`;
       const tw = ctx.measureText(label).width;
       const pw = tw + 16 * s;
@@ -624,7 +665,8 @@ export function usePoseTracker({
         snap.reps !== lastPushed.reps ||
         snap.stage !== lastPushed.stage ||
         snap.positioning !== lastPushed.positioning ||
-        snap.holding !== lastPushed.holding;
+        snap.holding !== lastPushed.holding ||
+        snap.viewOk !== lastPushed.viewOk;
       if (!changed && now - lastPushTs < STATS_PUSH_MS) return;
       lastPushTs = now;
       lastPushed = {
@@ -632,6 +674,7 @@ export function usePoseTracker({
         stage: snap.stage,
         positioning: snap.positioning,
         holding: snap.holding,
+        viewOk: snap.viewOk,
       };
       setStats({
         ...snap,
