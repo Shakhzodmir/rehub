@@ -37,6 +37,37 @@ function squatFrame(angle: number, opts: { leftAngle?: number; leanX?: number; r
 }
 
 /**
+ * Front-view standing frame with both legs near-vertical; `kneeMedial` shifts
+ * both knees toward the body midline (positive = dynamic valgus / knees-in).
+ * Shoulders are spread wide so the engine reads it as facing the camera.
+ */
+function frontStanceFrame(kneeMedial: number): Point[] {
+  const lm = emptyLm();
+  const set = (i: number, x: number, y: number) => (lm[i] = { x, y, visibility: 0.95 });
+  set(12, 0.35, 0.25); // right shoulder (image-left)
+  set(11, 0.65, 0.25); // left shoulder
+  set(24, 0.4, 0.45); set(26, 0.4 + kneeMedial, 0.62); set(28, 0.4, 0.8); // right leg
+  set(23, 0.6, 0.45); set(25, 0.6 - kneeMedial, 0.62); set(27, 0.6, 0.8); // left leg
+  return lm;
+}
+
+/**
+ * Front-view squat frame: shoulders wide (facing), each hip swings outward to
+ * encode the knee bend, `kneeMedial` shifts both knees toward the midline.
+ */
+function frontRepFrame(angle: number, kneeMedial = 0): Point[] {
+  const lm = emptyLm();
+  const rad = (angle * Math.PI) / 180;
+  const set = (i: number, x: number, y: number) => (lm[i] = { x, y, visibility: 0.95 });
+  set(12, 0.35, 0.26); set(11, 0.65, 0.26);
+  set(26, 0.4 + kneeMedial, 0.55); set(28, 0.4, 0.75);
+  set(24, 0.4 - 0.2 * Math.sin(rad), 0.55 + 0.2 * Math.cos(rad));
+  set(25, 0.6 - kneeMedial, 0.55); set(27, 0.6, 0.75);
+  set(23, 0.6 + 0.2 * Math.sin(rad), 0.55 + 0.2 * Math.cos(rad));
+  return lm;
+}
+
+/**
  * Standing patient squared to the camera (front view): shoulders spread wide
  * in x, legs straight. Used to test the "turn side-on" orientation guidance.
  */
@@ -375,6 +406,152 @@ describe("orientation guidance", () => {
     const { last } = run(engine, [{ frames: 5, lm: () => null }]);
     expect(last.viewHint).toBeNull();
     expect(last.viewOk).toBe(true);
+  });
+});
+
+describe("tempo (eccentric / concentric)", () => {
+  it("splits a rep into eccentric and concentric phases", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const { events } = oneRep(engine, 80);
+    const rep = events.find((e) => e.type === "rep") as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.eccentricMs).not.toBeNull();
+    expect(rep.concentricMs).not.toBeNull();
+    expect(rep.eccentricMs!).toBeGreaterThan(0);
+    expect(rep.concentricMs!).toBeGreaterThan(0);
+  });
+
+  it("maps the descent to the eccentric for a flex exercise (slow down, fast up)", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const { events } = run(engine, [
+      { angle: 175, frames: 12 },
+      ...ramp(175, 80, 24), // slow descent
+      { angle: 80, frames: 4 },
+      ...ramp(80, 175, 6), // fast ascent
+      { angle: 175, frames: 10 },
+    ]);
+    const rep = events.find((e) => e.type === "rep") as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.eccentricMs!).toBeGreaterThan(rep.concentricMs!);
+  });
+
+  it("inverts the mapping for an extend exercise (slow raise, fast lower)", () => {
+    const bridge = squatDef({ effortPhase: "extend", downAngle: 110, upAngle: 150 });
+    const engine = new ExerciseEngine(bridge);
+    const { events } = run(engine, [
+      { angle: 90, frames: 12 }, // rest = low angle
+      ...ramp(90, 170, 24), // slow raise = concentric for an extend move
+      { angle: 170, frames: 4 },
+      ...ramp(170, 90, 6), // fast lower = eccentric
+      { angle: 90, frames: 10 },
+    ]);
+    const rep = events.find((e) => e.type === "rep") as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.eccentricMs!).toBeLessThan(rep.concentricMs!);
+  });
+
+  it("flags a too-fast eccentric when minEccentricMs is set", () => {
+    const engine = new ExerciseEngine(squatDef({ minEccentricMs: 6000 }));
+    const { events } = oneRep(engine, 80);
+    const rep = events.find((e) => e.type === "rep") as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.good).toBe(false);
+    expect(rep.cue).toMatch(/медленнее/i);
+  });
+
+  it("reports the live tempo phase", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const desc = run(engine, [{ angle: 175, frames: 10 }, ...ramp(175, 85, 16)]);
+    expect(desc.last.tempoPhase).toBe("eccentric");
+    const hold = run(engine, [{ angle: 85, frames: 16 }], desc.t);
+    expect(hold.last.tempoPhase).toBe("hold");
+    const asc = run(engine, [...ramp(85, 175, 16)], hold.t);
+    expect(asc.last.tempoPhase).toBe("concentric");
+  });
+
+  it("excludes a false start / mid-zone hover from the eccentric", () => {
+    // dip into the mid-zone, hover, recover, THEN a fast real descent: the
+    // eccentric must reflect only the fast descent, so the slow-descent cue fires
+    const engine = new ExerciseEngine(squatDef({ minEccentricMs: 2000 }));
+    const { events } = run(engine, [
+      { angle: 175, frames: 12 },
+      ...ramp(175, 130, 5), // partial dip — never reaches the effort threshold (100)
+      { angle: 130, frames: 10 }, // hover
+      ...ramp(130, 175, 5), // recover toward rest
+      { angle: 175, frames: 8 },
+      ...ramp(175, 80, 6), // fast real descent (~0.2 s)
+      { angle: 80, frames: 6 },
+      ...ramp(80, 175, 8),
+      { angle: 175, frames: 8 },
+    ]);
+    const reps = events.filter((e) => e.type === "rep");
+    expect(reps).toHaveLength(1);
+    const rep = reps[0] as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.eccentricMs!).toBeLessThan(2000); // hover NOT folded in
+    expect(rep.good).toBe(false);
+    expect(rep.cue).toMatch(/медленнее/i);
+  });
+});
+
+describe("valgus (frontal-plane knee alignment)", () => {
+  const kneeDef = (o: Partial<ExerciseDef> = {}) =>
+    squatDef({ view: "front", valgus: { warnDeg: 10, flagDeg: 13 }, ...o });
+
+  it("reads positive (valgus) when the knees collapse inward", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const { last } = run(engine, [{ frames: 6, lm: () => frontStanceFrame(0.06) }]);
+    expect(last.kneeValgus).not.toBeNull();
+    expect(last.kneeValgus!).toBeGreaterThan(2);
+  });
+
+  it("reads negative (varus) when the knees bow outward", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const { last } = run(engine, [{ frames: 6, lm: () => frontStanceFrame(-0.06) }]);
+    expect(last.kneeValgus!).toBeLessThan(-2);
+  });
+
+  it("reads near zero for neutral alignment", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const { last } = run(engine, [{ frames: 6, lm: () => frontStanceFrame(0) }]);
+    expect(Math.abs(last.kneeValgus ?? 99)).toBeLessThan(2);
+  });
+
+  it("is null when the exercise doesn't request valgus", () => {
+    const engine = new ExerciseEngine(squatDef());
+    const { last } = oneRep(engine, 80);
+    expect(last.kneeValgus).toBeNull();
+  });
+
+  it("is null when the patient isn't square to the camera", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const { last } = run(engine, [{ angle: 120, frames: 10 }]); // squatFrame = side-on
+    expect(last.kneeValgus).toBeNull();
+  });
+
+  it("is null when a hip isn't clearly visible", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const { last } = run(engine, [
+      {
+        frames: 6,
+        lm: () => {
+          const f = frontStanceFrame(0.06);
+          f[23] = { ...f[23], visibility: 0.3 };
+          return f;
+        },
+      },
+    ]);
+    expect(last.kneeValgus).toBeNull();
+  });
+
+  it("measures valgus but never fails the rep on it", () => {
+    const engine = new ExerciseEngine(kneeDef());
+    const km = 0.02;
+    const { events } = run(engine, [
+      { frames: 12, lm: () => frontRepFrame(175, km) },
+      ...ramp(175, 80, 10).map((s) => ({ ...s, lm: () => frontRepFrame(s.angle, km) })),
+      { frames: 8, lm: () => frontRepFrame(80, km) },
+      ...ramp(80, 175, 10).map((s) => ({ ...s, lm: () => frontRepFrame(s.angle, km) })),
+      { frames: 8, lm: () => frontRepFrame(175, km) },
+    ]);
+    const rep = events.find((e) => e.type === "rep") as Extract<EngineEvent, { type: "rep" }>;
+    expect(rep.good).toBe(true); // deep, no rules/tempo limits → good despite valgus
+    expect(rep.peakValgus).not.toBeNull(); // yet the valgus was measured
   });
 });
 

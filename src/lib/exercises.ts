@@ -168,6 +168,30 @@ export const EXERCISES: Record<ExerciseKey, ExerciseDef> = {
     upAngle: 0,
     cues: ["Ставьте пятку вплотную к носку", "Смотрите вперёд", "Руки в стороны для баланса"],
   },
+  "knee-check": {
+    key: "knee-check",
+    name: "Скрин выравнивания коленей",
+    emoji: "🦵",
+    focus: "Контроль колена",
+    description:
+      "Периодический скрининг: присед ЛИЦОМ к камере — оценивает завал коленей внутрь (динамический вальгус). Это проверка, а не диагноз.",
+    difficulty: "Среднее",
+    mode: "rep",
+    joint: [24, 26, 28], // hip-knee-ankle, read frontally
+    downAngle: 100,
+    upAngle: 160,
+    effortPhase: "flex",
+    depthMargin: 8,
+    view: "front", // must face the camera — valgus is a frontal-plane measure
+    minEccentricMs: 2000, // controlled descent so the alignment is readable
+    valgus: { warnDeg: 10, flagDeg: 13 },
+    shallowCue: "Опускайтесь глубже, колени под контролем",
+    cues: [
+      "Встаньте лицом к камере, стопы на ширине бёдер",
+      "Опускайтесь медленно, колени смотрят на носки",
+      "Не заваливайте колени внутрь",
+    ],
+  },
 };
 
 export const EXERCISE_LIST = Object.values(EXERCISES);

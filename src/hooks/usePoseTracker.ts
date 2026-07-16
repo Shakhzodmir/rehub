@@ -73,6 +73,12 @@ export interface RepEvent {
   peakAngle: number;
   /** effort start → completion, ms */
   durationMs: number | null;
+  /** eccentric (lowering) phase, ms */
+  eccentricMs: number | null;
+  /** concentric (lifting) phase, ms */
+  concentricMs: number | null;
+  /** worst frontal-plane knee alignment during the rep (signed °), or null */
+  peakValgus: number | null;
 }
 
 export type Delegate = "GPU" | "CPU";
@@ -121,6 +127,8 @@ const INITIAL: PoseStats = {
   facing: "side",
   viewOk: true,
   viewHint: null,
+  tempoPhase: null,
+  kneeValgus: null,
   fps: 0,
   inferenceMs: 0,
   delegate: "GPU",
@@ -476,6 +484,9 @@ export function usePoseTracker({
               count: ev.count,
               peakAngle: ev.peakAngle,
               durationMs: ev.durationMs,
+              eccentricMs: ev.eccentricMs,
+              concentricMs: ev.concentricMs,
+              peakValgus: ev.peakValgus,
             });
           } else if (ev.type === "hold-milestone") {
             speak(`${ev.sec} секунд`, true);

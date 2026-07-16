@@ -16,7 +16,8 @@ export type ExerciseKey =
   | "lunges"
   | "glute-bridge"
   | "plank"
-  | "heel-toe";
+  | "heel-toe"
+  | "knee-check";
 
 /**
  * Secondary form check evaluated by the pose engine alongside the depth check.
@@ -75,6 +76,14 @@ export interface ExerciseDef {
   formRules?: FormRule[];
   /** a rep faster than this (ms, effort start → completion) triggers a tempo cue; omit to skip */
   minTempoMs?: number;
+  /** a rep whose eccentric (lowering) phase is faster than this (ms) is flagged; omit to skip */
+  minEccentricMs?: number;
+  /**
+   * Enables frontal-plane knee-alignment (valgus) measurement — only meaningful
+   * with view:"front". warnDeg/flagDeg are informational thresholds; valgus never
+   * fails a rep (the camera's absolute valgus error is too large for pass/fail).
+   */
+  valgus?: { warnDeg?: number; flagDeg?: number };
   /** hold mode: target continuous time in the effort zone, seconds */
   holdTargetSec?: number;
   /** auto-pick the better-visible body side (default true for rep/hold) */
@@ -118,6 +127,10 @@ export interface WorkoutSession {
   achievedROM?: number;
   /** average rep tempo, seconds per rep (effort start → completion) */
   avgRepSec?: number;
+  /** average eccentric (lowering) phase duration, seconds per rep */
+  avgEccentricSec?: number;
+  /** worst frontal-plane knee alignment across the session (signed °, + valgus / − varus) */
+  worstValgus?: number | null;
   /** left/right movement symmetry 0-100, when both sides were visible */
   symmetry?: number;
   /** hold mode: accumulated time in the correct position, seconds */
@@ -132,6 +145,12 @@ export interface RepRecord {
   peakAngle: number;
   /** effort start → completion, seconds */
   durationSec?: number;
+  /** eccentric (lowering-under-load) phase of the rep, seconds */
+  eccentricSec?: number;
+  /** concentric (lifting-under-load) phase of the rep, seconds */
+  concentricSec?: number;
+  /** worst frontal-plane knee alignment during the rep (signed °, + valgus / − varus) */
+  peakValgus?: number | null;
 }
 
 export interface Patient {

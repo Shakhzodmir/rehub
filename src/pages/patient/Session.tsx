@@ -137,6 +137,9 @@ export default function PatientSession() {
         good: e.good,
         peakAngle: e.peakAngle,
         durationSec: e.durationMs != null ? Math.round(e.durationMs / 100) / 10 : undefined,
+        eccentricSec: e.eccentricMs != null ? Math.round(e.eccentricMs / 100) / 10 : undefined,
+        concentricSec: e.concentricMs != null ? Math.round(e.concentricMs / 100) / 10 : undefined,
+        peakValgus: e.peakValgus,
       },
     ]);
     window.clearTimeout(feedbackTimer.current);
@@ -234,6 +237,19 @@ export default function PatientSession() {
   };
 
   const handleSave = (painLevel: number) => {
+    const ecc = finalStats.repHistory
+      .map((r) => r.eccentricSec)
+      .filter((v): v is number => v != null);
+    const avgEccentricSec = ecc.length
+      ? Math.round((ecc.reduce((s, v) => s + v, 0) / ecc.length) * 10) / 10
+      : undefined;
+    const valgusVals = finalStats.repHistory
+      .map((r) => r.peakValgus)
+      .filter((v): v is number => v != null);
+    const worstValgus = valgusVals.length
+      ? valgusVals.reduce((w, v) => (Math.abs(v) > Math.abs(w) ? v : w), valgusVals[0])
+      : undefined;
+
     addSession({
       patientId: CURRENT_PATIENT_ID,
       date: new Date().toISOString(),
@@ -247,6 +263,8 @@ export default function PatientSession() {
       painLevel,
       achievedROM: finalStats.achievedROM || undefined,
       avgRepSec: finalStats.avgRepSec ?? undefined,
+      avgEccentricSec,
+      worstValgus,
       symmetry: finalStats.symmetry ?? undefined,
       holdSec: isHold ? finalStats.holdSec : undefined,
       repHistory: finalStats.repHistory.length ? finalStats.repHistory : undefined,
@@ -477,7 +495,13 @@ export default function PatientSession() {
                     : isHold
                       ? `Удержание ${mmss(holdSec)} из ${mmss(holdTarget)} · ${stats.holding ? "в позиции ✓" : "займите позицию"}`
                       : `Стадия: ${stats.stage === "down" ? "вниз" : stats.stage === "up" ? "вверх" : "—"} · угол ${stats.viewOk ? "" : "~"}${stats.angle}°` +
+                        (stats.tempoPhase === "eccentric"
+                          ? " · опускание"
+                          : stats.tempoPhase === "concentric"
+                            ? " · подъём"
+                            : "") +
                         (stats.avgRepMs != null ? ` · темп ${(stats.avgRepMs / 1000).toFixed(1)} с` : "") +
+                        (stats.kneeValgus != null ? ` · колени ${stats.kneeValgus > 0 ? "+" : ""}${Math.round(stats.kneeValgus)}°` : "") +
                         (stats.symmetry != null ? ` · симметрия ${stats.symmetry}%` : "")}
                 </div>
                 <Button variant="destructive" onClick={stop}>
@@ -608,7 +632,12 @@ function RepStrip({ history }: { history: RepRecord[] }) {
       {history.map((r, i) => (
         <span
           key={i}
-          title={`Повтор ${i + 1}: ${r.peakAngle}°${r.durationSec != null ? `, ${r.durationSec.toFixed(1)} с` : ""}`}
+          title={
+            `Повтор ${i + 1}: ${r.peakAngle}°` +
+            (r.durationSec != null ? `, ${r.durationSec.toFixed(1)} с` : "") +
+            (r.eccentricSec != null ? `, спуск ${r.eccentricSec.toFixed(1)} с` : "") +
+            (r.peakValgus != null ? `, колени ${r.peakValgus > 0 ? "+" : ""}${Math.round(r.peakValgus)}°` : "")
+          }
           className={cn("h-2 w-5 rounded-full", r.good ? "bg-success" : "bg-warning")}
         />
       ))}

@@ -19,6 +19,8 @@ export type Positioning = "good" | "no-pose" | "low-visibility";
 export type Side = "left" | "right";
 /** which way the patient is turned relative to the camera */
 export type Facing = "front" | "side" | "oblique";
+/** live phase of the current rep: lengthening under load / shortening / paused */
+export type TempoPhase = "eccentric" | "concentric" | "hold" | null;
 
 export type EngineEvent =
   | {
@@ -30,6 +32,12 @@ export type EngineEvent =
       peakAngle: number;
       /** effort start → completion, ms (null if the start was occluded) */
       durationMs: number | null;
+      /** lengthening-under-load phase of this rep, ms (null if boundaries were occluded) */
+      eccentricMs: number | null;
+      /** shortening-under-load phase of this rep, ms (null if boundaries were occluded) */
+      concentricMs: number | null;
+      /** worst frontal-plane knee alignment during the effort (signed °, + valgus / − varus); null unless measured front-on */
+      peakValgus: number | null;
     }
   | { type: "hold-milestone"; sec: number }
   | { type: "hold-target" };
@@ -70,6 +78,15 @@ export interface EngineSnapshot {
   viewOk: boolean;
   /** guidance to fix the camera view (e.g. "turn side-on"), or null when it's fine */
   viewHint: string | null;
+  /** live rep phase (eccentric/concentric/hold), rep mode only */
+  tempoPhase: TempoPhase;
+  /**
+   * Live frontal-plane knee alignment (signed °: + valgus / − varus), worst of
+   * both knees. Only produced for exercises with a `valgus` config, measured
+   * front-on; null otherwise — a wrong view gives a false reading, so we show
+   * nothing rather than something misleading.
+   */
+  kneeValgus: number | null;
 }
 
 // minimum time between counted reps — rejects jitter that briefly recrosses both thresholds
@@ -93,8 +110,19 @@ const HOLD_MILESTONE_SEC = 10;
 // band so a patient hovering near the boundary doesn't flip the hint on/off.
 const SIDE_ON = 0.55;
 const FRONT_ON = 0.35;
+// valgus needs a stricter "square to the camera" than the turn-hint front gate:
+// even a slightly oblique view lets the knee travel forward in the sagittal
+// plane and reads as false medial collapse
+const FRONT_VALGUS_MAX = 0.25;
+// all three joints of each leg must clear this to trust a frontal-plane angle
+const VALGUS_MIN_VISIBILITY = 0.6;
+// per-frame angular speed below this reads as an isometric pause, not a phase
+const TEMPO_EPS = 0.6;
+// the live phase must hold this many frames before it commits (anti-jitter)
+const TEMPO_STABLE_FRAMES = 3;
 
 const TOO_FAST_CUE = "Слишком быстро — выполняйте плавнее";
+const SLOW_ECCENTRIC_CUE = "Опускайтесь медленнее и под контролем";
 const TURN_SIDE_CUE = "Встаньте боком к камере";
 const TURN_FRONT_CUE = "Повернитесь лицом к камере";
 
@@ -143,6 +171,23 @@ export class ExerciseEngine {
   private repMsSum = 0;
   private repMsCount = 0;
   private lastVisibleTs: number | null = null;
+
+  // tempo split: leftRestTs marks when the angle first left the rest zone (start
+  // of the eccentric/concentric approach — earlier than effortStartTs, which
+  // fires only at the deeper effort threshold and would drop the first slice);
+  // peakTs marks the turnaround. Splitting by the tracked peak is robust to the
+  // per-frame jitter that integrating angular speed would accumulate.
+  private leftRestTs: number | null = null;
+  private peakTs: number | null = null;
+  private tempoPhase: TempoPhase = null;
+  private tempoCand: TempoPhase = null;
+  private tempoStreak = 0;
+
+  // frontal-plane knee alignment (valgus). worstValgus tracks the effort peak;
+  // kneeValgus is the live worst-of-both-knees for the HUD.
+  private frontOkForValgus = false;
+  private worstValgus: number | null = null;
+  private kneeValgus: number | null = null;
 
   private rules: RuleState[];
 
@@ -215,6 +260,12 @@ export class ExerciseEngine {
     this.peak = this.effortIsFlex ? 180 : 0;
     this.effortStartTs = null;
     this.effortZoneMs = 0;
+    this.leftRestTs = null;
+    this.peakTs = null;
+    this.worstValgus = null;
+    this.tempoPhase = null;
+    this.tempoCand = null;
+    this.tempoStreak = 0;
     this.holding = false;
     this.filter.reset();
   }
@@ -259,9 +310,14 @@ export class ExerciseEngine {
         ? calculateAngle(src[ai], src[bi], src[ci], true)
         : this.angle2D(src[ai], src[bi], src[ci]);
     const angle = this.filter.filter(raw, t);
+    // live eccentric/concentric phase from the smoothed angle's velocity
+    if (this.def.mode === "rep") this.updateTempoPhase(angle);
     this.lastAngle = angle;
 
     this.updateSymmetry(src, raw);
+
+    // live frontal-plane knee alignment, for exercises that request it
+    this.kneeValgus = this.def.valgus ? this.computeValgus(lm) : null;
 
     if (this.def.mode === "hold") {
       this.stepHold(angle, dt);
@@ -312,6 +368,9 @@ export class ExerciseEngine {
       this.stage = "unknown";
       this.effortStartTs = null;
       this.effortZoneMs = 0;
+      this.leftRestTs = null;
+      this.peakTs = null;
+      this.worstValgus = null;
     }
   }
 
@@ -327,7 +386,12 @@ export class ExerciseEngine {
     if (this.desiredView === null) return;
     const ls = lm[11];
     const rs = lm[12];
-    if ((ls?.visibility ?? 0) < 0.5 || (rs?.visibility ?? 0) < 0.5) return; // can't tell yet
+    if ((ls?.visibility ?? 0) < 0.5 || (rs?.visibility ?? 0) < 0.5) {
+      // can't confirm orientation without the shoulders — don't trust a stale
+      // "front" verdict for valgus (fail-closed rather than measure blind)
+      this.frontOkForValgus = false;
+      return;
+    }
 
     let sideness: number;
     if (wl && wl[11] && wl[12]) {
@@ -357,6 +421,75 @@ export class ExerciseEngine {
       : this.desiredView === "side"
         ? TURN_SIDE_CUE
         : TURN_FRONT_CUE;
+    // valgus demands a squarer front than the turn hint: an oblique view fakes
+    // medial knee travel, so only trust the frontal-plane angle well inside FRONT
+    this.frontOkForValgus = this.desiredView === "front" && this.facing === "front" && s <= FRONT_VALGUS_MAX;
+  }
+
+  // ---- tempo (eccentric / concentric) --------------------------------------
+
+  /** Commit a live rep phase from the smoothed angle's velocity, with a
+   *  deadband for pauses and a short streak to reject jitter at turnaround. */
+  private updateTempoPhase(angle: number) {
+    const vel = angle - this.lastAngle; // degrees since the previous frame
+    let cand: TempoPhase;
+    if (Math.abs(vel) < TEMPO_EPS) {
+      cand = "hold";
+    } else {
+      const towardEffort = this.effortIsFlex ? vel < 0 : vel > 0;
+      const eccentric = this.effortIsFlex ? towardEffort : !towardEffort;
+      cand = eccentric ? "eccentric" : "concentric";
+    }
+    if (cand === this.tempoCand) this.tempoStreak += 1;
+    else {
+      this.tempoCand = cand;
+      this.tempoStreak = 1;
+    }
+    if (this.tempoStreak >= TEMPO_STABLE_FRAMES) this.tempoPhase = cand;
+  }
+
+  // ---- valgus (frontal-plane knee alignment) -------------------------------
+
+  /**
+   * Signed frontal-plane projection angle for one leg: how far the knee sits off
+   * the hip→ankle line, in the image plane. + = knee medial to the line (valgus),
+   * − = lateral (varus). Uses 2D image coords (aspect-scaled): world-Z is the
+   * noisiest MediaPipe axis exactly in the frontal view, so 3D would be garbage.
+   */
+  private legFPPA(hip: Point, knee: Point, ankle: Point, midHipX: number): number | null {
+    const h = this.scaled(hip);
+    const k = this.scaled(knee);
+    const a = this.scaled(ankle);
+    const dy = a.y - h.y;
+    if (Math.abs(dy) < 1e-6) return null; // hip/ankle level — no vertical line to project onto
+    const magnitude = 180 - calculateAngle(h, k, a); // 0 = straight leg
+    const lineX = h.x + (a.x - h.x) * ((k.y - h.y) / dy); // hip→ankle line at knee height
+    const medialDir = Math.sign(midHipX - h.x); // toward the body midline
+    const valgusSign = Math.sign(k.x - lineX) === medialDir ? 1 : -1;
+    return valgusSign * magnitude;
+  }
+
+  /** Worst (largest-magnitude, signed) frontal-plane knee angle across both legs,
+   *  or null when the view/visibility can't support an honest measurement. */
+  private computeValgus(lm: Point[]): number | null {
+    if (!this.frontOkForValgus) return null;
+    if (minVisibility(lm, [23, 24, 25, 26, 27, 28]) < VALGUS_MIN_VISIBILITY) return null;
+    const midHipX = (this.scaled(lm[23]).x + this.scaled(lm[24]).x) / 2;
+    const right = this.legFPPA(lm[24], lm[26], lm[28], midHipX);
+    const left = this.legFPPA(lm[23], lm[25], lm[27], midHipX);
+    const cands = [right, left].filter((v): v is number => v !== null);
+    if (cands.length === 0) return null;
+    return cands.reduce((worst, v) => (Math.abs(v) > Math.abs(worst) ? v : worst), cands[0]);
+  }
+
+  /** Fold the live knee alignment into the rep's worst-so-far (by magnitude). */
+  private accumulateValgus() {
+    if (
+      this.kneeValgus !== null &&
+      (this.worstValgus === null || Math.abs(this.kneeValgus) > Math.abs(this.worstValgus))
+    ) {
+      this.worstValgus = this.kneeValgus;
+    }
   }
 
   // ---- shared gates --------------------------------------------------------
@@ -394,15 +527,31 @@ export class ExerciseEngine {
     const atRest = this.effortIsFlex ? angle > upAngle : angle < downAngle;
     const atEffort = this.effortIsFlex ? angle < downAngle : angle > upAngle;
 
+    // committed direction of travel (from the streak-filtered tempo phase):
+    // toward the effort extreme, or retreating back toward rest
+    const approaching = this.effortIsFlex ? this.tempoPhase === "eccentric" : this.tempoPhase === "concentric";
+    const retreating = this.effortIsFlex ? this.tempoPhase === "concentric" : this.tempoPhase === "eccentric";
+
     if (this.cycle === "unknown") {
       if (atRest) this.cycle = "rest";
       return;
     }
 
     if (this.cycle === "rest") {
+      // Anchor the phase timer at the start of the committed approach. Drop the
+      // anchor whenever the patient is in the rest zone or actively retreating,
+      // so a false start or a mid-zone hover isn't folded into the eccentric.
+      if (atRest || retreating) {
+        this.leftRestTs = null;
+        this.worstValgus = null;
+      } else if (this.leftRestTs === null && approaching) {
+        this.leftRestTs = t;
+      }
+      this.accumulateValgus(); // track alignment across the whole approach, not just below the effort threshold
       if (atEffort) {
         this.cycle = "effort";
         this.peak = angle;
+        this.peakTs = t;
         this.effortStartTs = t;
         this.effortZoneMs = 0;
         for (const r of this.rules) {
@@ -414,11 +563,16 @@ export class ExerciseEngine {
     }
 
     // cycle === "effort"
-    this.peak = this.effortIsFlex ? Math.min(this.peak, angle) : Math.max(this.peak, angle);
+    const newPeak = this.effortIsFlex ? Math.min(this.peak, angle) : Math.max(this.peak, angle);
+    if (newPeak !== this.peak) {
+      this.peak = newPeak;
+      this.peakTs = t; // turnaround = deepest point reached so far
+    }
     this.bestEffort = this.effortIsFlex
       ? Math.min(this.bestEffort, this.peak)
       : Math.max(this.bestEffort, this.peak);
     if (atEffort) this.effortZoneMs += dt; // pause time at the extreme, for holdSeconds
+    this.accumulateValgus();
     this.evaluateRules(lm);
 
     if (atRest) {
@@ -429,6 +583,9 @@ export class ExerciseEngine {
       this.cycle = "rest";
       this.effortStartTs = null;
       this.effortZoneMs = 0;
+      this.leftRestTs = null;
+      this.peakTs = null;
+      this.worstValgus = null;
     }
   }
 
@@ -457,12 +614,28 @@ export class ExerciseEngine {
       this.repMsCount += 1;
     }
 
-    const good = depthOk && !brokenRule && holdOk && !tooFast;
+    // split by the turnaround: approach (leaving rest → peak) and return
+    // (peak → rest). Which one is the eccentric depends on where the effort is:
+    // a squat lengthens the quads on the way DOWN (approach), a bridge on the way
+    // DOWN too — but that's its return. Map through effortIsFlex, never hardcode.
+    const startTs = this.leftRestTs ?? this.effortStartTs;
+    const approachMs = this.peakTs !== null && startTs !== null ? this.peakTs - startTs : null;
+    const returnMs = this.peakTs !== null ? t - this.peakTs : null;
+    const eccentricMs = this.effortIsFlex ? approachMs : returnMs;
+    const concentricMs = this.effortIsFlex ? returnMs : approachMs;
+
+    const slowEnough =
+      this.def.minEccentricMs === undefined ||
+      eccentricMs === null ||
+      eccentricMs >= this.def.minEccentricMs;
+
+    const good = depthOk && !brokenRule && holdOk && !tooFast && slowEnough;
     let cue: string | null = null;
     if (!depthOk) cue = this.def.shallowCue ?? "Шире амплитуду";
     else if (brokenRule) cue = brokenRule.rule.cue;
     else if (!holdOk) cue = `Задержитесь в этом положении на ${this.opts.holdSeconds} с`;
     else if (tooFast) cue = TOO_FAST_CUE;
+    else if (!slowEnough) cue = SLOW_ECCENTRIC_CUE;
 
     if (good) this.goodReps += 1;
     else this.violations += 1;
@@ -474,6 +647,11 @@ export class ExerciseEngine {
       count: this.reps,
       peakAngle: Math.round(this.peak),
       durationMs: repMs === null ? null : Math.round(repMs),
+      eccentricMs: eccentricMs === null ? null : Math.round(eccentricMs),
+      concentricMs: concentricMs === null ? null : Math.round(concentricMs),
+      // valgus never gates the rep — it's a measurement, not a pass/fail (the
+      // camera's absolute valgus error is far too large for pass/fail)
+      peakValgus: this.worstValgus === null ? null : Math.round(this.worstValgus),
     });
   }
 
@@ -597,6 +775,8 @@ export class ExerciseEngine {
       // only nag about the view while the body is actually tracked
       viewOk: positioning === "good" ? this.viewOk : true,
       viewHint: positioning === "good" ? this.viewHint : null,
+      tempoPhase: positioning === "good" ? this.tempoPhase : null,
+      kneeValgus: positioning === "good" ? this.kneeValgus : null,
     };
   }
 }
